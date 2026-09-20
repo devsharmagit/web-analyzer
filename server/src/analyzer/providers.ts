@@ -8,8 +8,13 @@ import { geminiAvailable, geminiCall } from "./gemini.js";
 
 // Ordered by specificity — a dedicated team/staff page beats a general About
 // page, which is more likely to have only the founder rather than the roster.
+// Tier 2 is a keyword match rather than exact paths: clinics often brand their
+// team page ("Meet the Glo Squad", "Our Injector Crew") in ways no fixed path
+// list can anticipate, so any path containing team/staff/provider/squad/crew
+// vocabulary — or the "meet-the-" prefix pattern — counts.
 const TEAM_PATH_PATTERNS = [
   /^\/(team|our-team|staff|providers|meet-the-team)\/?$/i,
+  /meet-the-|(^|-)(team|staff|squad|crew|providers?|injectors?|doctors?)(-|\/?$)/i,
   /^\/(about|about-us)\/?$/i,
 ];
 
