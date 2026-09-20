@@ -47,7 +47,7 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
       source: null,
       list: [],
     }),
-    withTimeout(detectLocations(crawl.origin, crawl.pages), 20000, {
+    withTimeout(detectLocations(crawl.origin, crawl.pages, crawl.sitemaps), 20000, {
       count: "unknown" as const,
       source: null,
       list: [],

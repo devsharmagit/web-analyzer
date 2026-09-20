@@ -1,5 +1,7 @@
 // Location extraction — Phase 4. Answers Q9: how many locations, and their info.
-// JSON-LD LocalBusiness first, /locations/ pages, locations.kml, footer NAP.
+// JSON-LD LocalBusiness first, then locations.kml (a Rank Math / Yoast Local
+// SEO sitemap of <Placemark> entries — the local-sitemap.xml child sitemap
+// Phase 1 already discovers points here), then a /locations/ page.
 
 import type { AnalyzedPage } from "./crawl.js";
 import { fetchHtml, extractJsonLd } from "./scrapeLite.js";
@@ -36,6 +38,19 @@ function fromJsonLd(blocks: any[]): Location[] {
     .filter((l) => l.address || l.phone);
 }
 
+// <Placemark><name>..</name><address>..</address><phoneNumber>..</phoneNumber></Placemark>
+function fromKml(xml: string): Location[] {
+  const out: Location[] = [];
+  for (const m of xml.matchAll(/<Placemark>([\s\S]*?)<\/Placemark>/gi)) {
+    const block = m[1]!;
+    const name = block.match(/<name>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/name>/i)?.[1]?.trim() || "";
+    const address = block.match(/<address>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/address>/i)?.[1]?.trim() || "";
+    const phone = block.match(/<phoneNumber>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/phoneNumber>/i)?.[1]?.trim() || "";
+    if (address || phone) out.push({ name, address, phone });
+  }
+  return out;
+}
+
 function normalizeAddress(addr: string): string {
   return addr.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -52,11 +67,31 @@ function dedupe(locations: Location[]): Location[] {
   return out;
 }
 
-/** Find and extract location info: JSON-LD LocalBusiness on the homepage first, then a /locations/ page. */
-export async function detectLocations(origin: string, pages: AnalyzedPage[]): Promise<LocationsResult> {
+/**
+ * Find and extract location info: JSON-LD LocalBusiness on the homepage first,
+ * then locations.kml (found via a `local`-sourced sitemap URL, if Phase 1 saw
+ * one), then a /locations/ page.
+ */
+export async function detectLocations(
+  origin: string,
+  pages: AnalyzedPage[],
+  sitemaps: string[] = []
+): Promise<LocationsResult> {
   const homeHtml = await fetchHtml(origin + "/");
   let found = fromJsonLd(extractJsonLd(homeHtml));
   let source = "/";
+
+  const kmlSitemap = sitemaps.find((s) => /local-sitemap|\.kml/i.test(s));
+  if (!found.length && kmlSitemap) {
+    const xml = await fetchHtml(kmlSitemap);
+    // local-sitemap.xml is itself a sitemap pointing at the real locations.kml file.
+    const kmlUrl = xml.match(/<loc>([^<]*\.kml)<\/loc>/i)?.[1] || (kmlSitemap.endsWith(".kml") ? kmlSitemap : null);
+    if (kmlUrl) {
+      const kml = await fetchHtml(kmlUrl);
+      found = fromKml(kml);
+      source = new URL(kmlUrl).pathname;
+    }
+  }
 
   const locationsPage = pages.find((p) => /^\/(locations?|our-locations)\/?$/i.test(p.path));
   if (!found.length && locationsPage) {
