@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# legacy website-build-tool code, kept locally for reference only
+reference/
+
+# logs / os
+*.log
+.DS_Store
