@@ -1,31 +1,76 @@
 // Types mirror the server's AnalyzeResult (server/src/analyzer). Kept in sync by
 // hand for now; a shared package can replace this once the shape settles.
 
-export interface AnalyzedPage {
-  path: string;
-  url: string;
-  source: string;
-  sources: string[];
-  isPage: boolean;
-  title: string;
+export type Confidence = "high" | "likely" | "unknown";
+
+export interface Detection {
+  value: string | null;
+  confidence: Confidence;
+  evidence: string[];
 }
 
-export interface CrawlResult {
-  origin: string;
-  discoveredVia: string;
-  sitemapIndex: string;
-  sitemaps: string[];
-  urlsSeen: number;
-  total: number;
-  pages: AnalyzedPage[];
-  counts: Record<string, number>;
-  warnings: string[];
-  durationMs: number;
+export interface PlatformResult {
+  cms: Detection;
+  builder: Detection;
+  ecommerce: Detection;
+}
+
+export interface StoreResult {
+  hasStore: boolean;
+  platform: string | null;
+  productCount: number;
+  categoryCount: number;
+}
+
+export interface TypeBucket {
+  count: number;
+  urls: string[];
+}
+
+export interface Provider {
+  name: string;
+  credentials: string;
+  role: string;
+  bio: string;
+  photo: string;
+}
+
+export interface ProvidersResult {
+  count: number | "unknown";
+  source: string | null;
+  list: Provider[];
+}
+
+export interface Location {
+  name: string;
+  address: string;
+  phone: string;
+}
+
+export interface LocationsResult {
+  count: number | "unknown";
+  source: string | null;
+  list: Location[];
 }
 
 export interface AnalyzeResult {
   url: string;
-  crawl: CrawlResult;
+  platform: PlatformResult;
+  pages: {
+    total: number;
+    byType: Record<string, TypeBucket>;
+    uncertainCount: number;
+  };
+  store: StoreResult;
+  providers: ProvidersResult;
+  locations: LocationsResult;
+  crawl: {
+    discoveredVia: string;
+    sitemaps: string[];
+    urlsSeen: number;
+    durationMs: number;
+    warnings: string[];
+  };
 }
 
 export async function analyze(url: string): Promise<AnalyzeResult> {

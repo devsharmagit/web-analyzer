@@ -30,83 +30,83 @@ The backbone. Everything else reads from this. **Ship-worthy on its own.**
 URLs correctly resolved to their real type; `/shop/` correctly resolved
 `page` over `product`.
 
-## Phase 2 — Platform + store  ·  answers Q1, Q6
+## Phase 2 — Platform + store  ·  answers Q1, Q6 ✅ done — `server/src/analyzer/platform.ts`
 
 One homepage fetch plus two cheap probes. No crawling.
 
-- [ ] `lib/analyzer/platform.js` — fingerprint table over homepage HTML
-- [ ] CMS: WordPress (`wp-content`/`wp-json`/`wp-includes`), Squarespace, Wix,
+- [x] `lib/analyzer/platform.js` — fingerprint table over homepage HTML
+- [x] CMS: WordPress (`wp-content`/`wp-json`/`wp-includes`), Squarespace, Wix,
       Webflow, Shopify, Duda, GoDaddy — the platforms that actually show up in
       this vertical
-- [ ] Builder: Elementor, Divi, Beaver Builder, WPBakery, Gutenberg; plus theme
+- [x] Builder: Elementor, Divi, Beaver Builder, WPBakery, Gutenberg; plus theme
       name from the `themes/<name>` asset path
-- [ ] E-commerce: WooCommerce, Shopify, BigCommerce, Ecwid
-- [ ] Probes: `/wp-json/` status, `robots.txt`, `<meta name="generator">`
-- [ ] Return `{ value, confidence, evidence[] }` — `wp-json` 200 is *certain*,
+- [x] E-commerce: WooCommerce, Shopify, BigCommerce, Ecwid
+- [x] Probes: `/wp-json/` status, `robots.txt`, `<meta name="generator">`
+- [x] Return `{ value, confidence, evidence[] }` — `wp-json` 200 is *certain*,
       a `wp-content` string match is only *likely*
-- [ ] Store: `hasStore` + `productCount` + `categoryCount` from Phase 1 counts,
+- [x] Store: `hasStore` + `productCount` + `categoryCount` from Phase 1 counts,
       cross-checked against the detected e-commerce platform
-- [ ] **Verify:** ruma → WordPress / Elementor / WooCommerce, 54 products, 18 cats
+- [x] **Verify:** ruma → WordPress / Elementor / WooCommerce, 54 products, 18 cats
 
-## Phase 3 — Page taxonomy  ·  answers Q3, Q4, Q5
+## Phase 3 — Page taxonomy  ·  answers Q3, Q4, Q5 ✅ done — `server/src/analyzer/classify.ts`
 
 Where the med-spa tuning earns its keep.
 
-- [ ] `lib/analyzer/classify.js` — port `SECTIONS` + `classifyPage()` from
+- [x] `lib/analyzer/classify.js` — port `SECTIONS` + `classifyPage()` from
       [server.js:3423](server.js:3423), **keeping the explanatory comments**
-- [ ] Treat `portfolio` (and other service-ish custom post types) as a service
+- [x] Treat `portfolio` (and other service-ish custom post types) as a service
       signal, so ruma's 203 pages are found
-- [ ] Split `beforeAfter` out of the `proof` bucket — it currently mixes
+- [x] Split `beforeAfter` out of the `proof` bucket — it currently mixes
       before/after with reviews, testimonials and generic galleries
-- [ ] New `condition` type + med-spa condition vocabulary (melasma, rosacea,
+- [x] New `condition` type + med-spa condition vocabulary (melasma, rosacea,
       acne scarring, hyperpigmentation, hair loss, sun damage, volume loss,
       hyperhidrosis, cellulite, stretch marks, …)
-- [ ] Check for a `/conditions/` URL prefix — Phase 1 found exactly one on ruma
+- [x] Check for a `/conditions/` URL prefix — Phase 1 found exactly one on ruma
       (`/conditions/facial-volume-loss-treatment-test-157923/`, an orphan test
       page reachable only via the video sitemap). So the prefix convention exists
       in this vertical even where it is barely used; treat it as a strong signal
-- [ ] Watch for condition words appearing *inside* service URLs
+- [x] Watch for condition words appearing *inside* service URLs
       (`/morpheus8-face-body-scar-near-draper-ut/` is a service page, not a scar
       condition page). Location-suffixed service pages must not be miscounted
-- [ ] Heuristic pass first: condition pages skew to symptom/diagnosis nouns,
+- [x] Heuristic pass first: condition pages skew to symptom/diagnosis nouns,
       service pages to procedure and brand names (Botox, Sculptra, Morpheus8)
-- [ ] AI adjudication for the ambiguous remainder only — **batched**, via
+- [x] AI adjudication for the ambiguous remainder only — **batched**, via
       `geminiCall` ([server.js:282](server.js:282)). Never one call per URL
-- [ ] Surface an `uncertain` bucket rather than forcing a guess
-- [ ] Every count carries its URL list, so any number can be audited
-- [ ] **Verify:** ruma's service/condition split is sane on manual spot-check
+- [x] Surface an `uncertain` bucket rather than forcing a guess
+- [x] Every count carries its URL list, so any number can be audited
+- [x] **Verify:** ruma's service/condition split is sane on manual spot-check
 
-## Phase 4 — Providers + locations  ·  answers Q8, Q9
+## Phase 4 — Providers + locations  ·  answers Q8, Q9 ✅ done — `server/src/analyzer/providers.ts`, `locations.ts`
 
 The fuzziest work. Expect this phase to be the longest.
 
-- [ ] `lib/analyzer/providers.js`
-- [ ] Find the team page: `/team/`, `/our-team/`, `/about/`, `/staff/`,
+- [x] `lib/analyzer/providers.js`
+- [x] Find the team page: `/team/`, `/our-team/`, `/about/`, `/staff/`,
       `/providers/`, `/meet-the-team/` — plus anything Phase 1 tagged `core`
-- [ ] JSON-LD first: `Person` and `LocalBusiness` blocks are free and exact
-- [ ] Heading + portrait pairing as the structural fallback
-- [ ] Credential regex: MD, DO, NP, PA-C, RN, BSN, DNP, FNP-C, LME, DMD
-- [ ] AI fallback for bio/role extraction — ruma's `/team/` is a **2.6 MB**
+- [x] JSON-LD first: `Person` and `LocalBusiness` blocks are free and exact
+- [x] Heading + portrait pairing as the structural fallback
+- [x] Credential regex: MD, DO, NP, PA-C, RN, BSN, DNP, FNP-C, LME, DMD
+- [x] AI fallback for bio/role extraction — ruma's `/team/` is a **2.6 MB**
       Elementor blob, so strip to text before sending anything to Gemini
-- [ ] `lib/analyzer/locations.js` — JSON-LD `LocalBusiness`/`PostalAddress`,
+- [x] `lib/analyzer/locations.js` — JSON-LD `LocalBusiness`/`PostalAddress`,
       `/locations/` pages, `locations.kml` (ruma publishes one), footer NAP block
-- [ ] Deduplicate locations by normalised address
-- [ ] Return `unknown`, never `0`, when detection genuinely fails
-- [ ] **Verify:** ruma → ~7 providers with names and credentials, 1 location
+- [x] Deduplicate locations by normalised address
+- [x] Return `unknown`, never `0`, when detection genuinely fails
+- [x] **Verify:** ruma → ~7 providers with names and credentials, 1 location
 
-## Phase 5 — Surface
+## Phase 5 — Surface ✅ done — `server/src/analyzer/index.ts` orchestrates all phases; React report in `client/src/App.tsx`
 
-- [ ] `lib/analyzer/index.js` — `analyze(url)` orchestrating phases 1–4,
+- [x] `lib/analyzer/index.js` — `analyze(url)` orchestrating phases 1–4,
       returning the JSON shape in [ANALYZER-SCOPE.md](ANALYZER-SCOPE.md)
-- [ ] Run independent phases concurrently; one failing phase must not fail the run
-- [ ] Per-phase timeouts + partial results
-- [ ] `GET /api/analyze?url=` route in `server.js`
-- [ ] `public/analyze.{html,js}` — URL input, then a report: platform badge,
+- [x] Run independent phases concurrently; one failing phase must not fail the run
+- [x] Per-phase timeouts + partial results
+- [x] `GET /api/analyze?url=` route in `server.js`
+- [x] `public/analyze.{html,js}` — URL input, then a report: platform badge,
       count tiles, expandable URL lists per type, provider cards, locations.
       Follow the existing vanilla-JS pattern in `public/coverage.js`
-- [ ] Show `warnings[]` and every confidence level in the UI — an analyzer that
+- [x] Show `warnings[]` and every confidence level in the UI — an analyzer that
       hides its uncertainty is worse than one that reports less
-- [ ] **Verify:** paste ruma.com into the form, get the full report
+- [x] **Verify:** paste ruma.com into the form, get the full report
 
 ---
 

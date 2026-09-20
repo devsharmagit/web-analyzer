@@ -1,3 +1,9 @@
+try {
+  process.loadEnvFile(new URL("../.env", import.meta.url));
+} catch {
+  // .env is optional locally; Gemini-dependent phases degrade to "uncertain"/"unknown".
+}
+
 import express from "express";
 import cors from "cors";
 import { analyze } from "./analyzer/index.js";

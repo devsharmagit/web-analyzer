@@ -1,0 +1,147 @@
+// Platform + store fingerprinting — Phase 2. Answers Q1 (what platform) and
+// Q6 (do they sell anything). One homepage fetch plus two cheap probes; no
+// crawling here (Phase 1 already crawled).
+
+const UA = "Mozilla/5.0 (compatible; G99-Analyzer/1.0)";
+
+export type Confidence = "high" | "likely" | "unknown";
+
+export interface Detection {
+  value: string | null;
+  confidence: Confidence;
+  evidence: string[];
+}
+
+export interface PlatformResult {
+  cms: Detection;
+  builder: Detection;
+  ecommerce: Detection;
+}
+
+export interface StoreResult {
+  hasStore: boolean;
+  platform: string | null;
+  productCount: number;
+  categoryCount: number;
+}
+
+async function fetchText(url: string, timeoutMs = 10000): Promise<string> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { redirect: "follow", signal: ctl.signal, headers: { "User-Agent": UA } });
+    return r.ok ? await r.text() : "";
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchStatus(url: string, timeoutMs = 8000): Promise<number> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { redirect: "follow", signal: ctl.signal, headers: { "User-Agent": UA } });
+    return r.status;
+  } catch {
+    return 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// CMS fingerprints, cheapest signal (string match in HTML) first.
+const CMS_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
+  { name: "WordPress", re: /wp-content|wp-includes|wp-json/i },
+  { name: "Shopify", re: /cdn\.shopify\.com|Shopify\.theme/i },
+  { name: "Squarespace", re: /squarespace\.com|static1\.squarespace/i },
+  { name: "Wix", re: /wix\.com|wixstatic\.com/i },
+  { name: "Webflow", re: /webflow\.com|website-files\.com/i },
+  { name: "Duda", re: /irp\.cdn-website\.com|dudamobile/i },
+  { name: "GoDaddy", re: /godaddy\.com\/websites|gdwebsite/i },
+];
+
+const BUILDER_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
+  { name: "Elementor", re: /elementor/i },
+  { name: "Divi", re: /divi-style|et_pb_/i },
+  { name: "Beaver Builder", re: /fl-builder/i },
+  { name: "WPBakery", re: /wpb_wrapper|js_composer/i },
+  { name: "Gutenberg", re: /wp-block-/i },
+];
+
+const ECOMMERCE_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
+  { name: "WooCommerce", re: /woocommerce/i },
+  { name: "Shopify", re: /cdn\.shopify\.com|Shopify\.theme/i },
+  { name: "BigCommerce", re: /bigcommerce\.com/i },
+  { name: "Ecwid", re: /ecwid\.com|xproductbrowser/i },
+];
+
+function detectFromHtml(html: string, table: Array<{ name: string; re: RegExp }>): Detection {
+  for (const fp of table) {
+    if (fp.re.test(html)) {
+      return { value: fp.name, confidence: "likely", evidence: [`"${fp.re.source}" matched in homepage HTML`] };
+    }
+  }
+  return { value: null, confidence: "unknown", evidence: [] };
+}
+
+/** Fingerprint the platform (CMS, page builder, e-commerce) from one homepage fetch + two probes. */
+export async function detectPlatform(origin: string): Promise<PlatformResult> {
+  const html = await fetchText(origin + "/");
+
+  const cms = detectFromHtml(html, CMS_FINGERPRINTS);
+  const builder = detectFromHtml(html, BUILDER_FINGERPRINTS);
+  const ecommerce = detectFromHtml(html, ECOMMERCE_FINGERPRINTS);
+
+  // <meta name="generator"> is a direct, authoritative signal when present.
+  const genMatch = html.match(/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']+)["']/i);
+  if (genMatch) {
+    const gen = genMatch[1]!;
+    if (!cms.value && /wordpress/i.test(gen)) {
+      cms.value = "WordPress";
+      cms.confidence = "high";
+      cms.evidence.push(`<meta name="generator"> = "${gen}"`);
+    } else if (cms.value && new RegExp(cms.value, "i").test(gen)) {
+      cms.confidence = "high";
+      cms.evidence.push(`<meta name="generator"> confirms "${gen}"`);
+    }
+  }
+
+  // wp-json 200 is the strongest possible WordPress signal — certain, not likely.
+  if (cms.value === "WordPress" || !cms.value) {
+    const status = await fetchStatus(origin + "/wp-json/");
+    if (status === 200) {
+      cms.value = "WordPress";
+      cms.confidence = "high";
+      cms.evidence.push("GET /wp-json/ → 200");
+    }
+  }
+
+  // Theme name, if we can see it, adds evidence to whichever builder we found
+  // (or names the theme even when no known builder matched).
+  const themeMatch = html.match(/\/themes\/([a-z0-9_-]+)\//i);
+  if (themeMatch) {
+    const theme = themeMatch[1]!;
+    (builder.value ? builder : builder).evidence.push(`theme path: /themes/${theme}/`);
+    if (!builder.value) {
+      builder.value = theme;
+      builder.confidence = "likely";
+    }
+  }
+
+  return { cms, builder, ecommerce };
+}
+
+/** Store presence + size, derived from Phase 1's source counts and cross-checked against ecommerce detection. */
+export function detectStore(counts: Record<string, number>, ecommerce: Detection): StoreResult {
+  const productCount = counts.product || 0;
+  const categoryCount = counts.product_cat || 0;
+  const hasStore = productCount > 0 || categoryCount > 0 || ecommerce.value != null;
+  return {
+    hasStore,
+    platform: ecommerce.value,
+    productCount,
+    categoryCount,
+  };
+}

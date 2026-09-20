@@ -126,17 +126,130 @@ h2 {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 8px;
 }
 
 .counts li {
-  display: flex;
-  justify-content: space-between;
-  padding: 8px 12px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.counts summary {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.counts summary::-webkit-details-marker {
+  display: none;
+}
+
+.url-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 12px 10px;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.url-list li {
+  padding: 3px 0;
+  border: none;
+  background: none;
+  display: block;
+}
+
+.url-list a {
+  color: var(--muted);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.url-list a:hover {
+  color: var(--accent);
+}
+
+.url-list .more {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.badges {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  min-width: 120px;
+}
+
+.badge-label {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.badge-value {
+  display: block;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.badge.conf-high {
+  border-color: #2d6a4f;
+}
+
+.badge.conf-likely {
+  border-color: #6a5a2d;
+}
+
+.badge.conf-unknown {
+  opacity: 0.6;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.card {
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.card .cred {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.card .role {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.card .bio {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.meta.warn {
+  color: #ffd08a;
 }
 
 .warnings ul {
