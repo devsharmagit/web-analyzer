@@ -144,11 +144,25 @@ export async function detectPlatform(origin: string): Promise<PlatformResult> {
   return { cms, builder, ecommerce };
 }
 
-/** Store presence + size, derived from Phase 1's source counts and cross-checked against ecommerce detection. */
+/**
+ * Store presence + size, derived from Phase 1's source counts and cross-checked
+ * against ecommerce detection.
+ *
+ * hasStore requires actual product evidence (a sitemap with real products/
+ * categories), NOT just the e-commerce plugin being installed. Confirmed live
+ * on tribecamedspa.com: WooCommerce fingerprints in the HTML (the plugin is
+ * active) but zero products in any sitemap — "hasStore: true, 0 products" is
+ * self-contradictory and would mislead an employee reading the report ("do
+ * they have a store?" "yes... selling nothing?"). A dormant/unused plugin
+ * install is common (installed for one gift-card flow, or left over from a
+ * template) and isn't what "has a store" means to the person asking.
+ * `platform` still reports which e-commerce plugin was detected even when
+ * hasStore is false — that's a separate, still-useful fact.
+ */
 export function detectStore(counts: Record<string, number>, ecommerce: Detection): StoreResult {
   const productCount = counts.product || 0;
   const categoryCount = counts.product_cat || 0;
-  const hasStore = productCount > 0 || categoryCount > 0 || ecommerce.value != null;
+  const hasStore = productCount > 0 || categoryCount > 0;
   return {
     hasStore,
     platform: ecommerce.value,

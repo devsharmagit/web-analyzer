@@ -116,6 +116,24 @@ export function classifyPage(pathname: string, source: string): Section {
 export interface TaxonomyResult {
   byType: Record<string, { count: number; urls: string[] }>;
   uncertainCount: number;
+  warnings: string[];
+}
+
+// Races a slow enhancement step (Gemini adjudication, Crawlee content fetch)
+// against its own timeout so a hang there degrades to "skip this step" rather
+// than discarding the whole, already-computed, fast regex classification —
+// which is what the outer withTimeout() in index.ts used to do, confirmed
+// live: a 266-page Divi site's content-fetch step ran long, the outer
+// timeout fired, and the ENTIRE taxonomy silently came back empty ({}) with
+// no warning, despite ~250 pages already having been classified correctly by
+// regex before the slow step even started.
+async function withInternalTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<{ value: T; timedOut: boolean }> {
+  let timedOut = false;
+  const value = await Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => { timedOut = true; resolve(fallback); }, ms)),
+  ]);
+  return { value, timedOut };
 }
 
 // Pages that landed in "other" AND are plausible custom-post-type service pages
@@ -178,7 +196,16 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
     push(section.key, p.url);
   }
 
-  const resolved = await adjudicateUncertain(uncertainPages);
+  const warnings: string[] = [];
+
+  const { value: resolved, timedOut: adjudicationTimedOut } = await withInternalTimeout(
+    adjudicateUncertain(uncertainPages).catch(() => new Map<string, "service" | "condition">()),
+    20000,
+    new Map<string, "service" | "condition">()
+  );
+  if (adjudicationTimedOut && uncertainPages.length) {
+    warnings.push(`AI adjudication of ${uncertainPages.length} ambiguous pages timed out — they were left as "uncertain" instead.`);
+  }
   let uncertainCount = 0;
   for (const p of uncertainPages) {
     const verdict = resolved.get(p.path);
@@ -191,18 +218,27 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
 
   // Content-based reclassification for the bounded "other" set: a real page
   // fetch checking for Product JSON-LD / og:type=product / a WooCommerce
-  // add-to-cart button beats guessing from the URL alone. Best-effort — a
-  // fetch failure or a Crawlee-level error just leaves the page in "other".
+  // add-to-cart button beats guessing from the URL alone. Best-effort and
+  // internally time-boxed — a slow or failed fetch just leaves those pages in
+  // "other" rather than blocking (or, worse, silently discarding) the rest of
+  // the already-computed taxonomy. Confirmed live: a large Divi site's
+  // content-fetch step overran the OLD outer-only timeout and wiped out all
+  // ~250 correctly-classified pages along with it.
   const contentChecked = otherPages.slice(0, MAX_CONTENT_FETCH);
-  let signals: Map<string, { looksLikeProduct: boolean }> = new Map();
-  try {
-    signals = await fetchContentSignals(contentChecked.map((p) => p.url));
-  } catch {
-    // best-effort; falls through to "other" for all of them below
+  const { value: signals, timedOut: contentFetchTimedOut } = await withInternalTimeout(
+    fetchContentSignals(contentChecked.map((p) => p.url)).catch(() => new Map<string, { looksLikeProduct: boolean }>()),
+    20000,
+    new Map<string, { looksLikeProduct: boolean }>()
+  );
+  if (contentFetchTimedOut && contentChecked.length) {
+    warnings.push(`Content fetch for ${contentChecked.length} ambiguous pages timed out — they were left as "other" instead of checked for a product page.`);
+  }
+  if (otherPages.length > MAX_CONTENT_FETCH) {
+    warnings.push(`${otherPages.length} pages landed in "other"; only the first ${MAX_CONTENT_FETCH} were content-checked for a product page.`);
   }
   for (const p of otherPages) {
     push(signals.get(p.url)?.looksLikeProduct ? "shop" : "other", p.url);
   }
 
-  return { byType, uncertainCount };
+  return { byType, uncertainCount, warnings };
 }

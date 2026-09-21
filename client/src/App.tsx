@@ -82,7 +82,9 @@ function Report({ result }: { result: AnalyzeResult }) {
       <p className="text-muted">
         {store.hasStore
           ? `Has a store (${store.platform ?? "unknown platform"}) — ${store.productCount} products, ${store.categoryCount} categories`
-          : "No store detected"}
+          : store.platform
+            ? `${store.platform} is installed, but no products were found — not an active store`
+            : "No store detected"}
       </p>
 
       <SectionHeading>Pages by type</SectionHeading>

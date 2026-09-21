@@ -46,9 +46,12 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
       builder: { value: null, confidence: "unknown" as const, evidence: [] },
       ecommerce: { value: null, confidence: "unknown" as const, evidence: [] },
     }),
-    // Higher timeout: classifyPages now does a bounded Crawlee content fetch
-    // (up to MAX_CONTENT_FETCH pages) for the ambiguous "other" bucket.
-    withTimeout(classifyPages(crawl.pages), 45000, { byType: {}, uncertainCount: 0 }),
+    // Safety-net timeout only: classifyPages now internally time-boxes its own
+    // slow steps (Gemini adjudication, Crawlee content fetch) at 20s each, so
+    // this should rarely fire. It used to be the ONLY timeout, which meant a
+    // slow content-fetch step silently discarded the entire, already-computed
+    // taxonomy for all other pages — confirmed live on a 266-page Divi site.
+    withTimeout(classifyPages(crawl.pages), 55000, { byType: {}, uncertainCount: 0, warnings: [] }),
     withTimeout(detectProviders(crawl.origin, crawl.pages), 30000, {
       count: "unknown" as const,
       source: null,
@@ -63,6 +66,14 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
 
   const store = detectStore(crawl.counts, platform.ecommerce);
 
+  // Surface taxonomy's own warnings (internal timeouts on its slow steps) and
+  // the outer-safety-net "reason" (if THAT fired instead) alongside crawl's —
+  // one place in the response for "here's what you should not fully trust."
+  const allWarnings = [...crawl.warnings, ...taxonomy.warnings];
+  if ("reason" in taxonomy && typeof (taxonomy as any).reason === "string") {
+    allWarnings.push(`Page classification: ${(taxonomy as any).reason}`);
+  }
+
   return {
     url: crawl.origin,
     platform,
@@ -75,7 +86,7 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
       sitemaps: crawl.sitemaps,
       urlsSeen: crawl.urlsSeen,
       durationMs: crawl.durationMs,
-      warnings: crawl.warnings,
+      warnings: allWarnings,
     },
   };
 }
