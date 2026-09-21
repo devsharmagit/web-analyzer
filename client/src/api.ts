@@ -76,7 +76,8 @@ export interface AnalyzeResult {
 }
 
 export async function analyze(url: string): Promise<AnalyzeResult> {
-  const res = await fetch(`/api/analyze?url=${encodeURIComponent(url)}`);
+  const API_BASE = import.meta.env.VITE_API_URL || "https://web-analyzer-ztnw.onrender.com";
+  const res = await fetch(`${API_BASE}/api/analyze?url=${encodeURIComponent(url)}`);
   const body = await res.json();
   if (!res.ok) throw new Error(body?.error || `Request failed (${res.status})`);
   return body as AnalyzeResult;
