@@ -197,5 +197,75 @@ placeholder-text issue (ruma → "Onboarding Growth99", havenpmu →
 for a "does this look like a real person's name" sanity check on provider
 extraction, next.
 
-## AFTER (filled in at end of Phase 5)
-_TBD_
+## Phase 4 — provider/location content fixes, done (2026-09-21)
+
+Two concrete bugs the baseline had flagged as "noted, not yet scored" turned
+out to be the real priority — both fixed using the same `fetchContent.ts`-style
+diagnosis-from-real-HTML approach as Phase 2, not the originally-planned
+multi-page-provider/multi-location work (deferred — no site in the 9-site
+sample actually needed it; building it speculatively would have been guessing
+at a requirement instead of fixing a measured one).
+
+**1. Placeholder-provider bug (providers.ts).** Root cause confirmed by
+inspecting the raw JSON-LD: an SEO plugin (Yoast/Rank Math) auto-injects a
+`Person` block for the page's WordPress **author** account on nearly every
+page — that's a CMS login, not a team member. ruma.com and havenpmu.com both
+returned exactly this (their agency/dev account) as the *only* "provider."
+Fix: reject any JSON-LD `Person` match with no `jobTitle` and no
+`description` — a genuine team-roster entry always carries a role or bio; bare
+author schema never does (just name + Gravatar). This correctly falls through
+to the existing AI-extraction fallback.
+  - ruma.com: 1 fake provider ("Onboarding Growth99") → **27 real providers**
+    (Shelby Miller, Chrissy Bushell, Tessa Brown, ... — matches the providers
+    ANALYZER-SCOPE.md's own ground-truth section names).
+  - havenpmu.com: 1 fake provider ("InfraTeamAdmin") → **10 real providers**.
+
+**2. Duplicate-provider bug, found while re-validating (providers.ts).**
+culturemedspa.com returned "Anya Zerilla" 4 times, identical role each time —
+a carousel/slider widget (Elementor/Swiper) duplicating the same slide markup
+in the raw DOM for seamless looping. Fix: dedupe by normalized name after
+either extraction path. 18 entries → 15 correct ones.
+
+**3. Location double-count bug, found while re-validating (locations.ts).**
+culturemedspa.com reported 2 locations (truth: 1) — two separate JSON-LD
+blocks describing the *same* business with complementary partial info (one
+had an address but no phone, the other a phone but no address), so the
+existing exact-key dedupe never collided them. Fix: a conservative merge pass
+— only fires when there's exactly one addressless and one phoneless entry
+(the shape of "same business, two incomplete descriptions"), leaving genuine
+multi-location sites (which report complete, distinct addresses) untouched.
+Verified no regression on ruma.com / gloderma.com (single complete entries,
+unaffected).
+
+**Re-scored after Phase 4: objective 54/54 (100%), taxonomy 54/54 (100%)** —
+unchanged from Phase 2 (these were provider/location fixes, not taxonomy), but
+provider/location *data quality* — not measured by the accuracy-percentage
+metric, since the eval harness only scored counts/categories, not identity —
+improved substantially and is now spot-checkable by eye in the JSON output.
+
+**Deferred, not done:** multi-page provider support (individual `/team/*`
+subpages instead of one roster page) and true multi-location parsing beyond
+what KML/JSON-LD already provide — no site in the 9-site sample needed either,
+so building them now would be speculative rather than measured. Revisit if a
+future site surfaces the need.
+
+## AFTER (Phase 0-4 complete, 2026-09-21)
+
+| Metric | Baseline (Phase 1) | After Phase 2 | After Phase 4 |
+|---|---|---|---|
+| Objective fields (CMS/builder/ecommerce/pages/products/locations) | 100% | 100% | 100% |
+| Taxonomy spot-check (54 hand-labeled URLs) | 85.2% | 100% | 100% |
+| Provider data quality | 2/9 sites returning CMS placeholder text as the sole "provider"; 1/9 with quadruplicated entries | unchanged | all fixed, verified against real site content |
+| Location data quality | 1/9 sites double-counting one business as two locations | unchanged | fixed |
+
+Phase 5 (full re-run + report) is effectively folded into the above, since
+every phase in this plan was scored immediately after landing rather than
+batched to the end — there is no separate "before Phase 5 / after Phase 5"
+gap left to measure on the current 9-site sample.
+
+**What would most improve the numbers from here:** not more fixes to these 9
+sites (diminishing returns — objective and taxonomy are both saturated at
+100% on this sample), but **expanding the hand-labeled sample to more sites
+and more URLs per site**, since 54 URLs across 9 sites is a real but modest
+sample. The next-highest-leverage work is broadening the eval set, not
+further tuning against sites already at 100%.

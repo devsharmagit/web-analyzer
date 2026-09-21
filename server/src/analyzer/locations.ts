@@ -85,6 +85,31 @@ function dedupe(locations: Location[]): Location[] {
   return out;
 }
 
+// A page commonly carries more than one JSON-LD block describing the SAME
+// business (e.g. an Organization block and a LocalBusiness block from
+// different plugins), each with only PART of the info — one has an address
+// but no phone, the other has a phone but no address. Exact-key dedupe above
+// can't catch this (there's no shared non-empty field to key on), so it was
+// reporting 2 locations for culturemedspa.com's single physical address.
+// Merge conservatively: only when there's exactly one addressless entry and
+// exactly one phoneless-but-addressed entry, on the assumption this is one
+// business described twice, not two real locations (a page with genuinely
+// multiple locations reports more than one complete address, which this
+// leaves alone).
+function mergeComplementaryPartials(locations: Location[]): Location[] {
+  const addressless = locations.filter((l) => !l.address && l.phone);
+  const phoneless = locations.filter((l) => l.address && !l.phone);
+  if (addressless.length !== 1 || phoneless.length !== 1) return locations;
+
+  const merged: Location = {
+    name: phoneless[0]!.name || addressless[0]!.name,
+    address: phoneless[0]!.address,
+    phone: addressless[0]!.phone,
+  };
+  const rest = locations.filter((l) => l !== addressless[0] && l !== phoneless[0]);
+  return [merged, ...rest];
+}
+
 /**
  * Find and extract location info: JSON-LD LocalBusiness on the homepage first,
  * then locations.kml (found via a `local`-sourced sitemap URL, if Phase 1 saw
@@ -136,6 +161,6 @@ export async function detectLocations(
     return { count: "unknown", source: null, list: [], reason: "no JSON-LD, locations.kml, /locations/ page, or footer address found" };
   }
 
-  const deduped = dedupe(found);
+  const deduped = mergeComplementaryPartials(dedupe(found));
   return { count: deduped.length, source, list: deduped };
 }
