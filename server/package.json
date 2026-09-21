@@ -10,7 +10,9 @@
     "start": "node dist/index.js",
     "test": "tsx src/analyzer/crawl.test.ts",
     "typecheck": "tsc --noEmit",
-    "validate": "tsx validation/run.ts"
+    "validate": "tsx validation/run.ts",
+    "worksheet": "tsx validation/buildWorksheet.ts",
+    "score": "tsx validation/score.ts"
   },
   "license": "UNLICENSED",
   "dependencies": {

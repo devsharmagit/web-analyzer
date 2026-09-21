@@ -20,8 +20,14 @@ interface Section {
 }
 
 const SECTIONS: Section[] = [
+  // "/home-2/", "/contacts/" (plural) etc. confirmed live: WordPress sites
+  // routinely have a duplicate/staging homepage ("home-2") or a slug variant
+  // of "contact" that a strict allowlist misses entirely.
   { key: "core", label: "Core pages", scope: "required",
-    test: (p) => p === "/" || /^\/(about|about-us|team|our-team|staff|providers|contact|contact-us|services|treatments|menu)\/?$/.test(p) },
+    test: (p) =>
+      p === "/" ||
+      /^\/home(-\d+)?\/?$/.test(p) ||
+      /^\/(about|about-us|team|our-team|staff|providers|contacts?|contact-us|services|treatments|menu)\/?$/.test(p) },
   // Must be a real location landing page ("medical spa near X"), not merely a URL
   // that happens to end in a state code — that matched 200+ blog posts.
   { key: "locations", label: "Location / local SEO", scope: "recommended",
@@ -34,8 +40,13 @@ const SECTIONS: Section[] = [
     test: (p) => /(pre-and-post|pre-post|aftercare|post-care|instruction)/.test(p) },
   // Before/after split out of the old "proof" bucket — a gallery of results
   // photos is a distinct, countable page type (Q5), not folded into reviews.
+  // Bare "gallery" / "results" are included (not just the compound phrases)
+  // because in this vertical a standalone /gallery/ or /results/ page is
+  // overwhelmingly a before/after gallery, not a generic photo gallery —
+  // confirmed against real sites (conqraesthetics /gallery/, drippynursejess
+  // /results/ were both misrouted to "proof" before this widened match).
   { key: "beforeAfter", label: "Before & after", scope: "recommended",
-    test: (p) => /(before-and-after|before-after|b-a-gallery|results-gallery)/.test(p) },
+    test: (p) => /(before-and-after|before-after|b-a-gallery|results-gallery|\bgallery\b|\bresults\b)/.test(p) },
   // Condition vocabulary: what the patient HAS, not what the clinic DOES.
   // Checked before "service" below so condition words win when a URL is
   // otherwise ambiguous, but see the location-suffix guard in classifyPage —
@@ -46,16 +57,22 @@ const SECTIONS: Section[] = [
       /(melasma|rosacea|acne-scar|hyperpigmentation|hair-loss|sun-damage|volume-loss|hyperhidrosis|cellulite|stretch-marks|dark-spots|fine-lines|wrinkles|double-chin|sagging-skin|uneven-skin-tone|enlarged-pores)/.test(p) },
   { key: "service", label: "Treatment / service pages", scope: "required",
     test: (p) => /(botox|dysport|filler|sculptra|microneedl|laser|peel|facial|inject|infusion|iv-|hormone|hrt|weight-loss|prp|prf|thread|skincare|hydrafacial|coolsculpt|kybella|bbl|moxi|morpheus|miradry|thermoclear|red-light|tox|lash|brow|wax|hair-removal|skin-tightening|body-contour)/.test(p) },
+  // Offers is tested BEFORE proof: "affiliate-partner-discounts" is a discount
+  // program, not a trust/affiliation page, but proof's bare "partner" keyword
+  // used to win first — confirmed live on ruma.com.
+  { key: "offers", label: "Offers, memberships & financing", scope: "recommended",
+    test: (p) => /(special|offer|promo|vip|membership|payment-plan|financ|gift|package|bank|discount|affiliate)/.test(p) },
   { key: "proof", label: "Proof & trust", scope: "recommended",
     test: (p) => /(review|testimonial|gallery|results|partner)/.test(p) },
-  { key: "offers", label: "Offers, memberships & financing", scope: "recommended",
-    test: (p) => /(special|offer|promo|vip|membership|payment-plan|financ|gift|package|bank)/.test(p) },
   { key: "shop", label: "Store & products", scope: "out-of-scope",
     test: (p, src) => src === "product" || /^\/(shop|store|product|cart|checkout|my-account)/.test(p) },
   { key: "blog", label: "Blog & articles", scope: "out-of-scope",
     test: (p, src) => src === "post" || /^\/(blog|blogs|news|article)/.test(p) },
+  // "sitemap" used to be a bare keyword here and wrongly caught a marketing
+  // "/html-sitemap/" page (a site-navigation index, not a legal document) —
+  // confirmed live on conqraesthetics. Require "xml-sitemap" specifically.
   { key: "legal", label: "Legal & policy", scope: "out-of-scope",
-    test: (p) => /(privacy|terms|policy|policies|accessibility|hipaa|disclaimer|sitemap)/.test(p) },
+    test: (p) => /(privacy|terms|policy|policies|accessibility|hipaa|disclaimer|xml-sitemap)/.test(p) },
   { key: "careers", label: "Careers", scope: "out-of-scope",
     test: (p) => /(career|job|employment|hiring)/.test(p) },
 ];

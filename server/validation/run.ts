@@ -10,17 +10,11 @@ import { dirname, join } from "node:path";
 import { crawlGroundTruth } from "./groundtruth.js";
 import { runAnalyzer } from "./runAnalyzer.js";
 import { compareOne, printTable } from "./compare.js";
+import { SITES } from "./sites.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = join(__dirname, "out");
 mkdirSync(OUT_DIR, { recursive: true });
-
-const SITES = [
-  "https://www.conqraesthetics.com/",
-  "https://drippynursejess.com/",
-  "https://trubeautybytrevor.com/",
-  "https://gloderma.com/",
-];
 
 (async () => {
   const allDiscrepancies: string[] = [];

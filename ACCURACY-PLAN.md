@@ -93,8 +93,61 @@ Each phase is independently committable and keeps existing tests green.
 
 ---
 
-## BASELINE (filled in at end of Phase 1)
-_TBD_
+## BASELINE (Phase 0 + Phase 1, 2026-09-21)
+
+Measured with `npm run validate && npm run worksheet && npm run score` across
+all 9 sites (ruma, conqraesthetics, drippynursejess, trubeautybytrevor,
+gloderma, culturemedspa, havenpmu, skinmedhealth, medspasanangelo).
+
+**Objective fields (CMS, builder, e-commerce, total pages, products,
+locations): 54/54 — 100%.** All sitemap/regex-derived numbers check out
+against independent ground truth. (Phase 0's dominant-builder fix and
+footer-NAP fallback are reflected in this — before Phase 0, 3 of 9 sites'
+locations were "unknown" instead of correct.)
+
+**Taxonomy spot-check (54 hand-labeled URLs, ~6/site, stratified across
+buckets): first pass 46/54 (85.2%).** 8 confirmed mismatches, all URL-slug
+regex limitations. Since 6 of the 8 were cheap, well-justified regex fixes
+(not requiring the full content-based rewrite), they were fixed immediately
+and re-scored:
+
+1. ~~**"gallery"/"results" pages misrouted to `proof` instead of
+   `beforeAfter`**~~ — **fixed.** Bare `gallery`/`results` added to the
+   `beforeAfter` regex (word-bounded), ahead of `proof` in match order.
+2. ~~**Path variants miss the `core` regex**~~ ("/contacts/" plural,
+   "/home-2/" duplicate homepage) — **fixed.** Core regex now accepts
+   `contacts?` and `/home(-\d+)?/`.
+3. ~~**False positive: `legal`'s bare `sitemap` keyword catches
+   `/html-sitemap/`**~~ — **fixed.** Now requires `xml-sitemap`.
+4. ~~**"affiliate-partner-discounts" misrouted to `proof`** (bare `partner`
+   keyword) instead of `offers`~~ — **fixed** (found during the fix pass, same
+   class of bug). `offers` now matches before `proof`, with `discount`/
+   `affiliate` added to its keywords.
+5. **Branded product pages fall to `other` instead of `shop`** (gloderma
+   `/alastin/`, ruma `/alastin/`) — **not fixed, deliberately deferred.** The
+   shop regex only matches `/shop|store|product|cart|.../` path prefixes; a
+   retail brand-name slug can't be enumerated by regex without a fragile brand
+   list. This is exactly what Phase 2/3 (content-based classification —
+   WooCommerce/JSON-LD Product signals from real page content) is for.
+
+**Taxonomy spot-check after the regex fixes: 52/54 — 96.3%** (re-crawled and
+re-scored fresh, not just the 6 patched cases in isolation). Only the 2
+branded-product-page misses remain, carried into Phase 2/3.
+
+Also noted, not yet scored: two sites' provider extraction returned
+CMS/dev-placeholder text instead of real staff (ruma → "Onboarding Growth99",
+havenpmu → "InfraTeamAdmin") — a data-quality risk Phase 4 should guard
+against (e.g. reject single-result extractions that don't look like a person's
+name, or cross-check against JSON-LD `Person` schema more strictly).
+
+**Revised Phase 2/3 scope, given this result:** the remaining accuracy gap is
+narrower and more specific than originally assumed — not "URL-slug
+classification is broadly unreliable" but "a small number of pages need real
+content (product schema, JSON-LD) to classify correctly, and provider
+extraction needs a sanity check against placeholder text." The Crawlee content
+layer is still worth building for these targeted cases, but the bar it needs
+to clear is now measured (96.3% → aim higher primarily by fixing the
+brand-name-product and placeholder-provider classes), not a guess.
 
 ## AFTER (filled in at end of Phase 5)
 _TBD_
