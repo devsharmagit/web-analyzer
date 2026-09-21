@@ -9,7 +9,7 @@
 //   3. Products, product categories and videos are separated from real pages so
 //      they can never inflate the headline page count.
 
-const UA = "Mozilla/5.0 (compatible; G99-Analyzer/1.0)";
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const SITEMAP_CANDIDATES = ["/sitemap.xml", "/wp-sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml"];
 const MAX_CHILD_SITEMAPS = 25;
 const ASSET_RE = /\.(xml|kml|jpe?g|png|webp|gif|svg|pdf|css|js|ico|zip|mp4|webm|json)$/i;
