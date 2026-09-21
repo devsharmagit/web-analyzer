@@ -5,7 +5,12 @@
 // condition type + vocabulary, and an `uncertain` bucket for AI adjudication.
 
 import { geminiAvailable, geminiCall } from "./gemini.js";
+import { fetchContentSignals } from "./fetchContent.js";
 import type { AnalyzedPage } from "./crawl.js";
+
+// Bound how many "other"-bucket pages get a real content fetch per analysis —
+// keeps runtime and load on the target site predictable even on a large site.
+const MAX_CONTENT_FETCH = 40;
 
 export type SectionKey =
   | "core" | "locations" | "forms" | "care" | "service" | "condition"
@@ -151,6 +156,11 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
   };
 
   const uncertainPages: AnalyzedPage[] = [];
+  // Generic "other" pages (not portfolio-sourced) are candidates for a real
+  // content fetch — this is where a branded product page like "/alastin/"
+  // lives: no "shop"/"product" string anywhere in its URL, so regex alone
+  // can never place it (confirmed in ACCURACY-PLAN.md's baseline).
+  const otherPages: AnalyzedPage[] = [];
 
   for (const p of pages) {
     if (!p.isPage) continue; // products/videos/etc. handled by store/crawl counts
@@ -159,6 +169,10 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
     // items — hold them for batched AI adjudication instead of mis-bucketing.
     if (section.key === "other" && p.source === "portfolio") {
       uncertainPages.push(p);
+      continue;
+    }
+    if (section.key === "other") {
+      otherPages.push(p);
       continue;
     }
     push(section.key, p.url);
@@ -173,6 +187,21 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
       push("uncertain", p.url);
       uncertainCount++;
     }
+  }
+
+  // Content-based reclassification for the bounded "other" set: a real page
+  // fetch checking for Product JSON-LD / og:type=product / a WooCommerce
+  // add-to-cart button beats guessing from the URL alone. Best-effort — a
+  // fetch failure or a Crawlee-level error just leaves the page in "other".
+  const contentChecked = otherPages.slice(0, MAX_CONTENT_FETCH);
+  let signals: Map<string, { looksLikeProduct: boolean }> = new Map();
+  try {
+    signals = await fetchContentSignals(contentChecked.map((p) => p.url));
+  } catch {
+    // best-effort; falls through to "other" for all of them below
+  }
+  for (const p of otherPages) {
+    push(signals.get(p.url)?.looksLikeProduct ? "shop" : "other", p.url);
   }
 
   return { byType, uncertainCount };

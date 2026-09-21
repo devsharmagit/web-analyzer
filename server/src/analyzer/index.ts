@@ -46,7 +46,9 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
       builder: { value: null, confidence: "unknown" as const, evidence: [] },
       ecommerce: { value: null, confidence: "unknown" as const, evidence: [] },
     }),
-    withTimeout(classifyPages(crawl.pages), 30000, { byType: {}, uncertainCount: 0 }),
+    // Higher timeout: classifyPages now does a bounded Crawlee content fetch
+    // (up to MAX_CONTENT_FETCH pages) for the ambiguous "other" bucket.
+    withTimeout(classifyPages(crawl.pages), 45000, { byType: {}, uncertainCount: 0 }),
     withTimeout(detectProviders(crawl.origin, crawl.pages), 30000, {
       count: "unknown" as const,
       source: null,

@@ -17,6 +17,9 @@ reference/
 # validation runs against real sites (names/bios scraped live — never commit)
 server/validation/out/
 
+# Crawlee's ephemeral request-queue/dataset storage
+server/.crawlee-storage/
+
 # logs / os
 *.log
 .DS_Store

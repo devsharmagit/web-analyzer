@@ -149,5 +149,53 @@ layer is still worth building for these targeted cases, but the bar it needs
 to clear is now measured (96.3% → aim higher primarily by fixing the
 brand-name-product and placeholder-provider classes), not a guess.
 
+## Phase 2 — content acquisition, done (2026-09-21)
+
+Installed `crawlee` (`CheerioCrawler` only — no browser). New
+`server/src/analyzer/fetchContent.ts` fetches a bounded set of pages
+concurrently (maxConcurrency 5, 1 retry) and extracts `{title, h1,
+metaDescription, looksLikeProduct}`. `crawleeBootstrap.ts` pins its storage to
+a git-ignored `server/.crawlee-storage/` and quiets its logging.
+
+**Wired into `classify.ts`**, not as a general rewrite — narrowly, for exactly
+the gap the baseline measured: pages that land in the generic `other` bucket
+(not portfolio-sourced, so not already covered by Gemini adjudication) get a
+real content fetch, capped at `MAX_CONTENT_FETCH = 40` pages per analysis, and
+are reclassified to `shop` if the fetched page shows a genuine product signal.
+
+**The product signal went through one real correction before shipping.** The
+first version checked bare `"@type":"Product"` JSON-LD and a loose
+`add-to-cart`+`woocommerce` text match — both looked reasonable but produced a
+confirmed false positive live: ruma.com's SEO plugin stamps a `Product`
+JSON-LD block (describing the *business*, for star-rating rich snippets) on
+every single page, and "add to cart" text sits in a sitewide header mini-cart
+widget. Diagnosed against the real HTML of a true product page
+(gloderma.com/alastin/) vs. the false-positive page
+(ruma.com/before-and-after-treatment-images/) and replaced with three signals
+confirmed to discriminate correctly: `og:type=product`, the WooCommerce
+`woocommerce-Price-amount` price-render class, and a real `name="add-to-cart"`
+form field.
+
+**Re-scored after Phase 2: objective 54/54 (100%), taxonomy 54/54 (100%)** on
+the same 54-URL hand-labeled sample used for the baseline.
+
+One result is worth being honest about rather than just banking as a win:
+ruma.com's `/alastin/` page — one of the two original mismatches — did **not**
+flip to `shop`. Its HTML has no price markup, no cart form, nothing
+purchasable on the page itself (title says "Buy Alastin Skincare Products
+Online," but that's SEO copy, not a working storefront). My original
+hand-label of "shop" was based on the title alone; the content-based check is
+arguably *more* correct in calling it `other`. This is the argument for
+content-based classification working as intended, not a shortfall — but it
+means "100% on this sample" partly reflects a corrected ground-truth label,
+not purely a system improvement. gloderma.com's `/alastin/` (which does have
+real WooCommerce price markup) correctly flipped to `shop`.
+
+**Not yet done (Phase 4 scope, carried forward):** the provider
+placeholder-text issue (ruma → "Onboarding Growth99", havenpmu →
+"InfraTeamAdmin") is unaddressed. `fetchContent.ts` is general enough to reuse
+for a "does this look like a real person's name" sanity check on provider
+extraction, next.
+
 ## AFTER (filled in at end of Phase 5)
 _TBD_
