@@ -129,7 +129,10 @@ function Report({ result }: { result: AnalyzeResult }) {
           ))}
         </div>
       ) : (
-        <p className="text-muted">No providers detected{providers.source ? ` (checked ${providers.source})` : ""}.</p>
+        <p className="text-muted">
+          No providers detected{providers.source ? ` (checked ${providers.source})` : ""}.
+          {providers.reason && <span className="block text-xs italic">{providers.reason}</span>}
+        </p>
       )}
 
       <SectionHeading>Locations {typeof locations.count === "number" ? `(${locations.count})` : "(unknown)"}</SectionHeading>
@@ -144,7 +147,10 @@ function Report({ result }: { result: AnalyzeResult }) {
           ))}
         </div>
       ) : (
-        <p className="text-muted">No locations detected.</p>
+        <p className="text-muted">
+          No locations detected.
+          {locations.reason && <span className="block text-xs italic">{locations.reason}</span>}
+        </p>
       )}
 
       {crawl.warnings.length > 0 && (

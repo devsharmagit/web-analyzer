@@ -18,10 +18,15 @@ export interface AnalyzeResult {
   crawl: Pick<CrawlResult, "discoveredVia" | "sitemaps" | "urlsSeen" | "durationMs" | "warnings">;
 }
 
+// Tags the fallback with a "timed out" reason only when the timeout branch
+// actually wins the race — so a UI can distinguish "we checked, found nothing"
+// (the phase's own reason) from "we never got an answer in time".
 async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
     promise,
-    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+    new Promise<T>((resolve) =>
+      setTimeout(() => resolve({ ...fallback, reason: `timed out after ${ms}ms` } as T), ms)
+    ),
   ]);
 }
 

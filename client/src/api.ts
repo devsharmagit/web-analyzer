@@ -39,6 +39,7 @@ export interface ProvidersResult {
   count: number | "unknown";
   source: string | null;
   list: Provider[];
+  reason?: string;
 }
 
 export interface Location {
@@ -51,6 +52,7 @@ export interface LocationsResult {
   count: number | "unknown";
   source: string | null;
   list: Location[];
+  reason?: string;
 }
 
 export interface AnalyzeResult {

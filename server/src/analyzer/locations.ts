@@ -16,6 +16,7 @@ export interface LocationsResult {
   count: number | "unknown";
   source: string | null;
   list: Location[];
+  reason?: string; // set when count is "unknown", explains why detection stopped
 }
 
 function addressToString(addr: any): string {
@@ -49,6 +50,23 @@ function fromKml(xml: string): Location[] {
     if (address || phone) out.push({ name, address, phone });
   }
   return out;
+}
+
+// Last resort: a street address + phone sitting in the footer with no JSON-LD,
+// no KML, no /locations/ page. Deliberately conservative — only fires when
+// nothing structured was found, and only trusts a real street-address shape
+// (number + street-type word + city, state zip), not a bare phone number alone,
+// since a phone with no address is too weak to call "a location."
+const ADDRESS_RE =
+  /\d{1,6}\s+[A-Za-z0-9.'\s]{2,40}(?:Street|St|Avenue|Ave|Blvd|Boulevard|Road|Rd|Suite|Ste|Drive|Dr|Way|Lane|Ln|Highway|Hwy|Circle|Cir|Court|Ct|Parkway|Pkwy)[.,]?\s*[A-Za-z0-9#.,\s]{0,40},\s*[A-Za-z\s]+,?\s*[A-Z]{2}\s*\d{5}/i;
+const PHONE_RE = /\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}/;
+
+function fromFooterHeuristic(html: string): Location[] {
+  const text = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " ");
+  const addressMatch = text.match(ADDRESS_RE);
+  if (!addressMatch) return []; // no address shape found = too weak to report a location
+  const phoneMatch = text.match(PHONE_RE);
+  return [{ name: "", address: addressMatch[0].replace(/\s+/g, " ").trim(), phone: phoneMatch?.[0] || "" }];
 }
 
 function normalizeAddress(addr: string): string {
@@ -100,12 +118,22 @@ export async function detectLocations(
     source = locationsPage.path;
   }
 
+  // Last resort: an address-shaped string in the footer/homepage, no structured
+  // data anywhere. Single-location only (a footer NAP block never lists more
+  // than the one address), and lower-confidence than every source above it.
+  if (!found.length) {
+    const heuristic = fromFooterHeuristic(homeHtml);
+    if (heuristic.length) {
+      return { count: heuristic.length, source: "footer (heuristic)", list: heuristic };
+    }
+  }
+
   // A dedicated /locations/ page existing but yielding no structured data still
   // tells us there's at least one location — count it as unknown detail rather
   // than zero.
   if (!found.length) {
-    if (locationsPage) return { count: "unknown", source: locationsPage.path, list: [] };
-    return { count: "unknown", source: null, list: [] };
+    if (locationsPage) return { count: "unknown", source: locationsPage.path, list: [], reason: "found a /locations/ page but no structured or footer address data on it" };
+    return { count: "unknown", source: null, list: [], reason: "no JSON-LD, locations.kml, /locations/ page, or footer address found" };
   }
 
   const deduped = dedupe(found);

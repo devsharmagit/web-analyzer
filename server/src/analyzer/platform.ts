@@ -77,13 +77,24 @@ const ECOMMERCE_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
   { name: "Ecwid", re: /ecwid\.com|xproductbrowser/i },
 ];
 
+// Sites commonly carry markers for more than one builder at once (an Elementor
+// site can still have a handful of leftover Divi classes from a theme, or vice
+// versa). Picking the FIRST regex that matches is arbitrary — it reflects table
+// order, not which builder actually built the page. Count occurrences of each
+// fingerprint instead and let the dominant one win.
 function detectFromHtml(html: string, table: Array<{ name: string; re: RegExp }>): Detection {
+  let best: { name: string; count: number; re: RegExp } | null = null;
   for (const fp of table) {
-    if (fp.re.test(html)) {
-      return { value: fp.name, confidence: "likely", evidence: [`"${fp.re.source}" matched in homepage HTML`] };
-    }
+    const global = new RegExp(fp.re.source, fp.re.flags.includes("g") ? fp.re.flags : fp.re.flags + "g");
+    const count = (html.match(global) || []).length;
+    if (count > 0 && (!best || count > best.count)) best = { name: fp.name, count, re: fp.re };
   }
-  return { value: null, confidence: "unknown", evidence: [] };
+  if (!best) return { value: null, confidence: "unknown", evidence: [] };
+  return {
+    value: best.name,
+    confidence: "likely",
+    evidence: [`"${best.re.source}" matched ${best.count}× in homepage HTML (dominant fingerprint)`],
+  };
 }
 
 /** Fingerprint the platform (CMS, page builder, e-commerce) from one homepage fetch + two probes. */

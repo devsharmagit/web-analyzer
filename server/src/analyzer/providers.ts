@@ -18,7 +18,7 @@ const TEAM_PATH_PATTERNS = [
   /^\/(about|about-us)\/?$/i,
 ];
 
-const CREDENTIAL_RE = /\b(MD|DO|NP|PA-C|RN|BSN|DNP|FNP-C|LME|DMD)\b/;
+const CREDENTIAL_RE = /\b(MD|DO|NP|PA-C|PA|RN|BSN|DNP|FNP-C|LME|DMD|APRN|CANS|CRNA|LE|CPPS|CLT)\b/;
 
 export interface Provider {
   name: string;
@@ -32,6 +32,7 @@ export interface ProvidersResult {
   count: number | "unknown";
   source: string | null;
   list: Provider[];
+  reason?: string; // set when count is "unknown", explains why detection stopped
 }
 
 function findTeamPage(pages: AnalyzedPage[]): AnalyzedPage | null {
@@ -78,10 +79,10 @@ ${text}`;
 /** Find and extract provider info from the site's team page, if one exists. */
 export async function detectProviders(origin: string, pages: AnalyzedPage[]): Promise<ProvidersResult> {
   const teamPage = findTeamPage(pages);
-  if (!teamPage) return { count: "unknown", source: null, list: [] };
+  if (!teamPage) return { count: "unknown", source: null, list: [], reason: "no team/staff/about-shaped page found in the crawl" };
 
   const html = await fetchHtml(teamPage.url);
-  if (!html) return { count: "unknown", source: teamPage.path, list: [] };
+  if (!html) return { count: "unknown", source: teamPage.path, list: [], reason: "team page found but could not be fetched" };
 
   const jsonLdPeople = fromJsonLd(extractJsonLd(html));
   if (jsonLdPeople.length) {
@@ -93,5 +94,8 @@ export async function detectProviders(origin: string, pages: AnalyzedPage[]): Pr
     return { count: aiPeople.length, source: teamPage.path, list: aiPeople };
   }
 
-  return { count: "unknown", source: teamPage.path, list: [] };
+  const reason = geminiAvailable()
+    ? "team page fetched but neither JSON-LD nor AI extraction found any people on it"
+    : "team page fetched but no JSON-LD people, and AI extraction is unavailable (no GEMINI_KEYS configured)";
+  return { count: "unknown", source: teamPage.path, list: [], reason };
 }
