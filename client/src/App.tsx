@@ -1,12 +1,25 @@
 import { useEffect, useState } from "react";
 import { analyze, type AnalyzeResult, type Detection } from "./api";
 import { oneLineSummary, toClipboardText } from "./summarize";
+import { motion, AnimatePresence } from "motion/react";
+import {
+  MagnifyingGlass,
+  WarningCircle,
+  Copy,
+  CheckCircle,
+  Globe,
+  Storefront,
+  Users,
+  MapPin,
+  Clock,
+  Files,
+  Sun,
+  Moon,
+  ChartBar,
+  Warning
+} from "@phosphor-icons/react";
 
-// Approximate, honest phrasing — the backend runs platform/taxonomy/providers/
-// locations CONCURRENTLY after the crawl, so this is not a literal step-by-step
-// progress bar (that would misrepresent the concurrency). It's just enough
-// feedback that a ~10-20s wait doesn't read as frozen.
-const PROGRESS_STAGES: Array<{ afterSeconds: number; message: string }> = [
+const PROGRESS_STAGES = [
   { afterSeconds: 0, message: "Crawling the sitemap…" },
   { afterSeconds: 2, message: "Reading pages, providers & locations…" },
   { afterSeconds: 10, message: "Cross-checking ambiguous pages…" },
@@ -25,6 +38,38 @@ function useElapsedSeconds(active: boolean): number {
     return () => clearInterval(id);
   }, [active]);
   return seconds;
+}
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    if (typeof localStorage !== "undefined" && localStorage.getItem("theme")) {
+      return localStorage.getItem("theme") as "light" | "dark";
+    }
+    if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      return "dark";
+    }
+    return "light";
+  });
+
+  useEffect(() => {
+    const root = window.document.documentElement;
+    if (theme === "dark") {
+      root.classList.add("dark");
+    } else {
+      root.classList.remove("dark");
+    }
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  return (
+    <button
+      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+      className="flex h-10 w-10 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-panel)] hover:text-[var(--color-text)] transition-colors active:scale-95"
+      aria-label="Toggle theme"
+    >
+      {theme === "dark" ? <Sun weight="bold" className="h-5 w-5" /> : <Moon weight="bold" className="h-5 w-5" />}
+    </button>
+  );
 }
 
 export default function App() {
@@ -52,175 +97,421 @@ export default function App() {
   const stage = [...PROGRESS_STAGES].reverse().find((s) => elapsed >= s.afterSeconds) ?? PROGRESS_STAGES[0]!;
 
   return (
-    <main className="mx-auto max-w-4xl px-5 pt-12 pb-20">
-      <h1 className="text-2xl font-bold text-white">Website Analyzer</h1>
-      <p className="mt-1 mb-6 text-muted">Give it one URL, get a structured profile of the site.</p>
-
-      <form className="flex gap-2" onSubmit={onSubmit}>
-        <input
-          type="text"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://example.com"
-          autoComplete="off"
-          spellCheck={false}
-          className="flex-1 rounded-lg border border-border bg-panel px-3.5 py-2.5 text-[15px] text-white outline-none focus:border-accent"
-        />
-        <button
-          type="submit"
-          disabled={loading}
-          className="rounded-lg bg-accent px-5 py-2.5 font-semibold text-[#0b1020] disabled:cursor-default disabled:opacity-60"
-        >
-          {loading ? "Analyzing…" : "Analyze"}
-        </button>
-      </form>
-
-      {loading && (
-        <div className="mt-4 flex items-center gap-3 rounded-lg border border-border bg-panel px-3.5 py-3 text-muted">
-          <span className="h-4 w-4 flex-none animate-spin rounded-full border-2 border-border border-t-accent" />
-          <span>
-            {stage.message} <span className="text-xs">({elapsed}s)</span>
-          </span>
+    <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text)] selection:bg-[var(--color-accent)] selection:text-[var(--color-accent-fg)] font-sans flex flex-col transition-colors duration-300">
+      
+      {/* Header */}
+      <header className="sticky top-0 z-40 w-full border-b border-[var(--color-border)]/50 bg-[var(--color-bg)]/80 backdrop-blur-md">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
+          <div className="flex items-center gap-2 font-semibold tracking-tight text-[var(--color-text)]">
+            <Globe weight="bold" className="h-5 w-5 text-[var(--color-accent)]" />
+            <span>WebAnalyzer</span>
+          </div>
+          
+          <div className="flex items-center gap-4">
+            {result && (
+              <form onSubmit={onSubmit} className="hidden md:flex relative w-64 items-center">
+                <input
+                  type="text"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://example.com"
+                  className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] py-1.5 pl-3 pr-8 text-sm outline-none transition-colors focus:border-[var(--color-accent)]"
+                />
+                <button type="submit" disabled={loading} className="absolute right-2 text-[var(--color-muted)] hover:text-[var(--color-text)]">
+                  {loading ? <div className="h-3 w-3 animate-spin rounded-full border border-t-[var(--color-accent)]" /> : <MagnifyingGlass weight="bold" />}
+                </button>
+              </form>
+            )}
+            <ThemeToggle />
+          </div>
         </div>
-      )}
+      </header>
 
-      {error && (
-        <div className="mt-4 rounded-lg border border-red-900/60 bg-red-950/40 px-3.5 py-3 text-red-300">{error}</div>
-      )}
+      <main className="flex-1 mx-auto w-full max-w-6xl px-6 py-10 md:py-16">
+        {!result && !loading && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: "easeOut" }}
+            className="flex flex-col items-center justify-center pt-20 text-center"
+          >
+            <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-[var(--color-panel)] shadow-sm">
+              <ChartBar weight="duotone" className="h-10 w-10 text-[var(--color-accent)]" />
+            </div>
+            <h1 className="text-4xl md:text-5xl font-semibold tracking-tight text-[var(--color-text)]">
+              Analyze any website
+            </h1>
+            <p className="mt-4 max-w-lg text-lg text-[var(--color-muted)]">
+              Discover the underlying architecture, platform, and page structure of any site in seconds.
+            </p>
 
-      {result && <Report result={result} />}
-    </main>
+            <form
+              className="mt-10 flex w-full max-w-md flex-col sm:flex-row gap-3"
+              onSubmit={onSubmit}
+            >
+              <div className="relative flex-1">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4 text-[var(--color-muted)]">
+                  <Globe weight="bold" />
+                </div>
+                <input
+                  type="text"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://example.com"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] py-3.5 pl-11 pr-4 text-[15px] shadow-sm outline-none transition-colors focus:border-[var(--color-accent)] focus:ring-1 focus:ring-[var(--color-accent)]/50"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="rounded-xl bg-[var(--color-accent)] px-8 py-3.5 font-medium text-[var(--color-accent-fg)] shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"
+              >
+                Analyze
+              </button>
+            </form>
+          </motion.div>
+        )}
+
+        <AnimatePresence mode="wait">
+          {loading && (
+            <motion.div
+              key="loading"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mx-auto mt-12 max-w-md"
+            >
+              <div className="flex flex-col items-center gap-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-8 text-center shadow-sm">
+                <div className="relative flex h-16 w-16 items-center justify-center rounded-full bg-[var(--color-bg)] shadow-sm">
+                  <div className="absolute inset-0 rounded-full border-4 border-[var(--color-border)]" />
+                  <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-[var(--color-accent)]" />
+                  <MagnifyingGlass weight="duotone" className="h-6 w-6 text-[var(--color-accent)]" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-[var(--color-text)]">{stage.message}</h3>
+                  <p className="mt-1 text-sm text-[var(--color-muted)]">Elapsed: {elapsed}s</p>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {error && (
+            <motion.div
+              key="error"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mx-auto mt-12 max-w-md overflow-hidden"
+            >
+              <div className="flex items-center gap-3 rounded-xl border border-red-500/20 bg-red-500/10 p-5 text-red-700 dark:text-red-400">
+                <WarningCircle weight="fill" className="h-6 w-6 flex-none" />
+                <span className="text-sm font-medium">{error}</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {result && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <Dashboard result={result} />
+          </motion.div>
+        )}
+      </main>
+    </div>
   );
 }
 
-function Report({ result }: { result: AnalyzeResult }) {
-  const { platform, pages, store, providers, locations, crawl } = result;
+function Dashboard({ result }: { result: AnalyzeResult }) {
+  const [activeTab, setActiveTab] = useState<"overview" | "pages" | "providers">("overview");
 
   return (
-    <section className="mt-8">
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
       <SummaryBanner result={result} />
 
-      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Tile label="Pages" value={pages.total} />
-        <Tile label="URLs seen" value={crawl.urlsSeen} />
-        <Tile label="Sitemaps" value={crawl.sitemaps.length} />
-        <Tile label="Time" value={`${(crawl.durationMs / 1000).toFixed(1)}s`} />
+      <div className="border-b border-[var(--color-border)]">
+        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+          <TabButton
+            active={activeTab === "overview"}
+            onClick={() => setActiveTab("overview")}
+            icon={<ChartBar />}
+            label="Overview"
+          />
+          <TabButton
+            active={activeTab === "pages"}
+            onClick={() => setActiveTab("pages")}
+            icon={<Files />}
+            label="Page Classification"
+            count={result.pages.total}
+          />
+          <TabButton
+            active={activeTab === "providers"}
+            onClick={() => setActiveTab("providers")}
+            icon={<Users />}
+            label="Providers & Locations"
+            count={(typeof result.providers.count === "number" ? result.providers.count : 0) + (typeof result.locations.count === "number" ? result.locations.count : 0)}
+          />
+        </nav>
       </div>
 
-      <p className="mt-5 text-muted">
-        <strong className="text-white">{result.url}</strong> · discovered via {crawl.discoveredVia}
-      </p>
+      <div className="min-h-[500px]">
+        <AnimatePresence mode="wait">
+          {activeTab === "overview" && (
+            <motion.div
+              key="overview"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              <TabOverview result={result} />
+            </motion.div>
+          )}
+          {activeTab === "pages" && (
+            <motion.div
+              key="pages"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              <TabPages pages={result.pages} />
+            </motion.div>
+          )}
+          {activeTab === "providers" && (
+            <motion.div
+              key="providers"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              <TabProviders locations={result.locations} providers={result.providers} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}
 
-      <SectionHeading>Platform</SectionHeading>
-      <div className="flex flex-wrap gap-2.5">
-        <Badge label="CMS" d={platform.cms} />
-        <Badge label="Builder" d={platform.builder} />
-        <Badge label="E-commerce" d={platform.ecommerce} />
+function TabButton({ active, onClick, icon, label, count }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; count?: number }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`group flex items-center gap-2 border-b-2 py-4 px-1 text-sm font-medium transition-colors ${
+        active
+          ? "border-[var(--color-accent)] text-[var(--color-accent)]"
+          : "border-transparent text-[var(--color-muted)] hover:border-[var(--color-border)] hover:text-[var(--color-text)]"
+      }`}
+    >
+      <span className={active ? "" : "opacity-70 group-hover:opacity-100 transition-opacity"}>{icon}</span>
+      <span>{label}</span>
+      {count !== undefined && (
+        <span className={`ml-1 rounded-full px-2 py-0.5 text-xs ${active ? "bg-[var(--color-accent)]/10 text-[var(--color-accent)]" : "bg-[var(--color-panel)] text-[var(--color-muted)]"}`}>
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function TabOverview({ result }: { result: AnalyzeResult }) {
+  const { platform, store, crawl } = result;
+  
+  return (
+    <div className="grid grid-cols-1 gap-8 md:grid-cols-12">
+      <div className="md:col-span-12 lg:col-span-4 space-y-8">
+        <section>
+          <SectionHeading>Crawl Stats</SectionHeading>
+          <div className="mt-4 grid grid-cols-2 gap-4">
+            <Tile icon={<Files weight="duotone" />} label="Pages" value={result.pages.total} />
+            <Tile icon={<Globe weight="duotone" />} label="URLs seen" value={crawl.urlsSeen} />
+            <Tile icon={<MapPin weight="duotone" />} label="Sitemaps" value={crawl.sitemaps.length} />
+            <Tile icon={<Clock weight="duotone" />} label="Time" value={`${(crawl.durationMs / 1000).toFixed(1)}s`} />
+          </div>
+        </section>
+
+        {crawl.warnings.length > 0 && (
+          <section>
+            <SectionHeading>Warnings</SectionHeading>
+            <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
+              <ul className="list-inside list-disc space-y-2 text-sm text-amber-800 dark:text-amber-400">
+                {crawl.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        )}
       </div>
 
-      <SectionHeading>Store</SectionHeading>
-      <p className="text-muted">
-        {store.hasStore
-          ? `Has a store (${store.platform ?? "unknown platform"}) — ${store.productCount} products, ${store.categoryCount} categories`
-          : store.platform
-            ? `${store.platform} is installed, but no products were found — not an active store`
-            : "No store detected"}
-      </p>
+      <div className="md:col-span-12 lg:col-span-8 space-y-8">
+        <section>
+          <SectionHeading>Architecture</SectionHeading>
+          <div className="mt-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6 md:p-8 shadow-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <Badge label="CMS" d={platform.cms} />
+              <Badge label="Builder" d={platform.builder} />
+            </div>
+          </div>
+        </section>
 
-      <SectionHeading>Pages by type</SectionHeading>
-      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <section>
+          <SectionHeading>E-Commerce</SectionHeading>
+          <div className="mt-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6 md:p-8 shadow-sm flex flex-col md:flex-row gap-8 items-start">
+            <div className="flex-1 w-full">
+              <Badge label="Platform" d={platform.ecommerce} />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-muted)] mb-2">
+                <Storefront weight="duotone" className="h-5 w-5" /> Store Status
+              </div>
+              <p className="text-sm leading-relaxed text-[var(--color-text)]">
+                {store.hasStore
+                  ? `Active store detected (${store.platform ?? "unknown platform"}). Found ${store.productCount} products across ${store.categoryCount} categories.`
+                  : store.platform
+                    ? `${store.platform} is installed, but no products were found. Not an active store.`
+                    : "No store detected on this site."}
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function TabPages({ pages }: { pages: AnalyzeResult["pages"] }) {
+  const uncertainBucket = pages.byType["uncertain"];
+  const uncertainUrls = uncertainBucket ? uncertainBucket.urls : [];
+  
+  return (
+    <div className="space-y-8">
+      {pages.uncertainCount > 0 && (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 md:p-6 shadow-sm">
+          <div className="flex items-start md:items-center gap-3 text-amber-700 dark:text-amber-400 font-medium">
+            <Warning weight="fill" className="h-5 w-5 mt-0.5 md:mt-0 flex-shrink-0" />
+            <span>{pages.uncertainCount} pages could not be classified with confidence.</span>
+          </div>
+          {uncertainUrls.length > 0 && (
+            <div className="mt-4 border-t border-amber-500/20 pt-4">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-300 mb-3">Unclassified URLs:</p>
+              <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2 text-xs text-amber-800 dark:text-amber-300 max-h-48 overflow-y-auto custom-scrollbar pr-2">
+                {uncertainUrls.map((u) => (
+                  <li key={u} className="truncate">
+                    <a href={u} target="_blank" rel="noreferrer" className="hover:underline hover:text-amber-800 dark:hover:text-amber-200">{u}</a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {Object.entries(pages.byType)
+          .filter(([type]) => type !== "uncertain")
           .sort((a, b) => b[1].count - a[1].count)
           .map(([type, bucket]) => (
-            <li key={type} className="rounded-lg border border-border bg-panel">
-              <details>
-                <summary className="flex cursor-pointer list-none justify-between px-3 py-2 [&::-webkit-details-marker]:hidden">
-                  <span>{type}</span>
-                  <b>{bucket.count}</b>
-                </summary>
-                <ul className="max-h-40 overflow-y-auto px-3 pt-1 pb-2.5 text-xs">
-                  {bucket.urls.slice(0, 50).map((u) => (
-                    <li key={u} className="py-0.5">
-                      <a href={u} target="_blank" rel="noreferrer" className="text-muted break-all hover:text-accent">
-                        {u}
-                      </a>
-                    </li>
-                  ))}
-                  {bucket.urls.length > 50 && (
-                    <li className="italic text-muted">…and {bucket.urls.length - 50} more</li>
-                  )}
-                </ul>
-              </details>
-            </li>
-          ))}
-      </ul>
-      {pages.uncertainCount > 0 && (
-        <p className="mt-2 text-amber-300">{pages.uncertainCount} pages could not be classified with confidence.</p>
-      )}
-
-      <SectionHeading>Providers {typeof providers.count === "number" ? `(${providers.count})` : "(unknown)"}</SectionHeading>
-      {providers.list.length > 0 ? (
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          {providers.list.map((p, i) => (
-            <div className="rounded-lg border border-border bg-panel px-3.5 py-3" key={i}>
-              <b>{p.name}</b>
-              {p.credentials && <span className="ml-1 text-sm text-muted">{p.credentials}</span>}
-              {p.role && <div className="mt-0.5 text-sm text-muted">{p.role}</div>}
-              {p.bio && <p className="mt-1.5 text-sm">{p.bio}</p>}
+            <div key={type} className="flex flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] shadow-sm transition hover:border-[var(--color-border)]/80">
+              <div className="flex items-center justify-between border-b border-[var(--color-border)]/50 bg-[var(--color-bg)]/30 px-5 py-4">
+                <span className="font-semibold capitalize text-[var(--color-text)]">{type}</span>
+                <span className="rounded-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2.5 py-0.5 text-xs font-semibold">{bucket.count}</span>
+              </div>
+              <ul className="flex-1 overflow-y-auto px-5 py-4 text-xs max-h-56 custom-scrollbar">
+                {bucket.urls.slice(0, 50).map((u) => (
+                  <li key={u} className="py-1.5 border-b border-[var(--color-border)]/30 last:border-0">
+                    <a href={u} target="_blank" rel="noreferrer" className="block truncate text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors">
+                      {u.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").replace(/\/$/, "")}
+                    </a>
+                  </li>
+                ))}
+                {bucket.urls.length > 50 && (
+                  <li className="pt-3 pb-1 text-center text-[var(--color-muted)] italic">…and {bucket.urls.length - 50} more</li>
+                )}
+              </ul>
             </div>
           ))}
-        </div>
-      ) : (
-        <p className="text-muted">
-          No providers detected{providers.source ? ` (checked ${providers.source})` : ""}.
-          {providers.reason && <span className="block text-xs italic">{providers.reason}</span>}
-        </p>
-      )}
+      </div>
+    </div>
+  );
+}
 
-      <SectionHeading>Locations {typeof locations.count === "number" ? `(${locations.count})` : "(unknown)"}</SectionHeading>
-      {locations.list.length > 0 ? (
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          {locations.list.map((l, i) => (
-            <div className="rounded-lg border border-border bg-panel px-3.5 py-3" key={i}>
-              <b>{l.name || "Location"}</b>
-              {l.address && <div className="mt-0.5 text-sm text-muted">{l.address}</div>}
-              {l.phone && <div className="mt-0.5 text-sm text-muted">{l.phone}</div>}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="text-muted">
-          No locations detected.
-          {locations.reason && <span className="block text-xs italic">{locations.reason}</span>}
-        </p>
-      )}
-
-      {crawl.warnings.length > 0 && (
-        <>
-          <SectionHeading>Warnings</SectionHeading>
-          <ul className="list-disc pl-5 text-amber-300">
-            {crawl.warnings.map((w, i) => (
-              <li key={i}>{w}</li>
+function TabProviders({ locations, providers }: { locations: AnalyzeResult["locations"]; providers: AnalyzeResult["providers"] }) {
+  return (
+    <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+      <section>
+        <SectionHeading>
+          Providers {typeof providers.count === "number" ? <span className="ml-2 rounded-full bg-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text)]">{providers.count}</span> : ""}
+        </SectionHeading>
+        {providers.list.length > 0 ? (
+          <div className="mt-4 flex flex-col gap-4">
+            {providers.list.map((p, i) => (
+              <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6 shadow-sm" key={i}>
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                  <div>
+                    <h4 className="font-semibold text-base">{p.name}</h4>
+                    {p.role && <div className="mt-1 text-sm font-medium text-[var(--color-accent)]">{p.role}</div>}
+                  </div>
+                  {p.credentials && <span className="inline-flex rounded-lg bg-[var(--color-border)]/50 px-2.5 py-1 text-xs font-medium text-[var(--color-muted)] self-start">{p.credentials}</span>}
+                </div>
+                {p.bio && <p className="mt-4 text-sm leading-relaxed text-[var(--color-muted)]">{p.bio}</p>}
+              </div>
             ))}
-          </ul>
-        </>
-      )}
-    </section>
+          </div>
+        ) : (
+          <div className="mt-4 rounded-2xl border border-[var(--color-border)] border-dashed bg-[var(--color-panel)]/30 p-10 text-center text-[var(--color-muted)] flex flex-col items-center">
+            <Users weight="duotone" className="h-10 w-10 opacity-30 mb-4" />
+            <p className="text-sm font-medium">No providers detected.</p>
+            {providers.reason && <p className="mt-2 text-xs opacity-70 max-w-sm">{providers.reason}</p>}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <SectionHeading>
+          Locations {typeof locations.count === "number" ? <span className="ml-2 rounded-full bg-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text)]">{locations.count}</span> : ""}
+        </SectionHeading>
+        {locations.list.length > 0 ? (
+          <div className="mt-4 flex flex-col gap-4">
+            {locations.list.map((l, i) => (
+              <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6 shadow-sm" key={i}>
+                <h4 className="font-semibold text-base flex items-center gap-2">
+                  <MapPin weight="fill" className="text-[var(--color-accent)] opacity-80" /> {l.name || "Location"}
+                </h4>
+                <div className="mt-4 space-y-2">
+                  {l.address && <div className="text-sm text-[var(--color-muted)]">{l.address}</div>}
+                  {l.phone && <div className="text-sm font-medium text-[var(--color-text)]">{l.phone}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-4 rounded-2xl border border-[var(--color-border)] border-dashed bg-[var(--color-panel)]/30 p-10 text-center text-[var(--color-muted)] flex flex-col items-center">
+            <MapPin weight="duotone" className="h-10 w-10 opacity-30 mb-4" />
+            <p className="text-sm font-medium">No locations detected.</p>
+            {locations.reason && <p className="mt-2 text-xs opacity-70 max-w-sm">{locations.reason}</p>}
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
-  return <h2 className="mt-7 mb-2.5 text-sm font-semibold tracking-wide text-muted uppercase">{children}</h2>;
+  return (
+    <h2 className="flex items-center text-[11px] font-bold tracking-[0.15em] text-[var(--color-muted)] uppercase">
+      {children}
+    </h2>
+  );
 }
 
-// The at-a-glance verdict for someone triaging a lead — one line, plus a copy
-// button that puts a CRM/note-ready summary on the clipboard. This is meant
-// to be readable without scrolling to the sections below it.
-// Falls back to the legacy execCommand path when the async Clipboard API is
-// blocked (denied permission, insecure context, some corporate browser
-// policies) — confirmed live: the Clipboard API can throw NotAllowedError
-// even though `navigator.clipboard` exists. Returns whether it worked, so the
-// caller can show an honest failure state instead of doing nothing visibly.
 function copyText(text: string): boolean {
   const textarea = document.createElement("textarea");
   textarea.value = text;
@@ -256,42 +547,60 @@ function SummaryBanner({ result }: { result: AnalyzeResult }) {
   }
 
   return (
-    <div className="rounded-xl border border-accent/40 bg-accent/10 px-4 py-3.5">
-      <p className="text-[15px] font-medium text-white">{oneLineSummary(result)}</p>
-      <button
-        type="button"
-        onClick={onCopy}
-        className="mt-2.5 rounded-md border border-border bg-panel px-3 py-1.5 text-xs font-medium text-muted hover:text-white"
-      >
-        {status === "copied" ? "Copied ✓" : status === "failed" ? "Couldn't copy — select the text manually" : "Copy summary for CRM / notes"}
-      </button>
+    <div className="relative overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6 shadow-sm">
+      <div className="absolute -right-20 -top-20 h-48 w-48 rounded-full bg-[var(--color-accent)]/10 blur-3xl pointer-events-none" />
+      <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-6">
+        <p className="text-base font-medium leading-relaxed text-[var(--color-text)] flex-1">
+          {oneLineSummary(result)}
+        </p>
+        <button
+          type="button"
+          onClick={onCopy}
+          className="flex-shrink-0 flex items-center justify-center gap-2 rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] px-5 py-2.5 text-sm font-medium text-[var(--color-text)] shadow-sm transition hover:bg-[var(--color-border)]/50 active:scale-95"
+        >
+          {status === "copied" ? (
+            <>
+              <CheckCircle weight="fill" className="text-emerald-500 h-4 w-4" /> Copied
+            </>
+          ) : status === "failed" ? (
+            "Couldn't copy"
+          ) : (
+            <>
+              <Copy weight="bold" className="h-4 w-4" /> Copy summary
+            </>
+          )}
+        </button>
+      </div>
     </div>
   );
 }
 
-function Tile({ label, value }: { label: string; value: string | number }) {
+function Tile({ label, value, icon }: { label: string; value: string | number; icon?: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-border bg-panel p-4 text-center">
-      <div className="text-2xl font-bold">{value}</div>
-      <div className="mt-0.5 text-xs text-muted">{label}</div>
+    <div className="flex flex-col justify-between rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] p-5 shadow-sm">
+      <div className="flex items-center gap-2 text-[var(--color-muted)] mb-3">
+        {icon && <span className="opacity-70">{icon}</span>}
+        <div className="text-[10px] font-bold uppercase tracking-wider">{label}</div>
+      </div>
+      <div className="text-2xl font-semibold tracking-tight text-[var(--color-text)]">{value}</div>
     </div>
   );
 }
 
-const CONFIDENCE_BORDER: Record<Detection["confidence"], string> = {
-  high: "border-emerald-800",
-  likely: "border-amber-800",
-  unknown: "border-border opacity-60",
+const CONFIDENCE_COLOR: Record<Detection["confidence"], string> = {
+  high: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20",
+  likely: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
+  unknown: "bg-[var(--color-border)]/30 text-[var(--color-muted)] border-[var(--color-border)] opacity-80",
 };
 
 function Badge({ label, d }: { label: string; d: Detection }) {
   return (
     <div
-      className={`min-w-[120px] rounded-lg border bg-panel px-3.5 py-2.5 ${CONFIDENCE_BORDER[d.confidence]}`}
+      className={`flex flex-col justify-between rounded-xl border p-4 ${CONFIDENCE_COLOR[d.confidence]}`}
       title={d.evidence.join("; ")}
     >
-      <span className="block text-[11px] text-muted uppercase">{label}</span>
-      <span className="block font-semibold">{d.value ?? "unknown"}</span>
+      <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">{label}</span>
+      <span className="mt-1.5 text-sm font-semibold">{d.value ?? "Unknown"}</span>
     </div>
   );
 }
