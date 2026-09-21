@@ -269,3 +269,53 @@ sites (diminishing returns — objective and taxonomy are both saturated at
 and more URLs per site**, since 54 URLs across 9 sites is a real but modest
 sample. The next-highest-leverage work is broadening the eval set, not
 further tuning against sites already at 100%.
+
+## Site #10 — lunamedspawi.com, found by the user (2026-09-22)
+
+Exactly the "expand the sample" prediction above played out immediately: a
+10th site, tested by the user (not me), surfaced a real gap the 9-site sample
+never exercised — a **discovery-layer** bug, not classification. Confirms the
+priority call above was right.
+
+**Bug found:** `crawl.ts` only ever read sitemaps, falling back to homepage-
+link scraping *only when the sitemap returned zero pages*. lunamedspawi.com's
+sitemap works fine but is genuinely incomplete — `/injectables/`,
+`/skincare/`, `/wellness/` are real, live, homepage-nav-linked pages in NO
+sitemap at all, and the site publishes no `product_cat` sitemap at all, so its
+10 `/product-category/*` pages (only reachable via links on its own `/shop/`
+page) were invisible too. Both are common real-world WordPress patterns
+(SEO plugins routinely exclude standalone landing pages and taxonomy
+archives), not specific to this one site.
+
+**Fix (`crawl.ts`):** always supplement sitemap discovery — not just as a
+last resort — with (1) the homepage's own on-page links, and (2) links found
+on the discovered `/shop/`-or-`/store/` page, if any. Guarded against a real
+precedence regression: a supplement-discovered URL is only added when the
+path is genuinely new, never as an extra source on a page the sitemap already
+found — otherwise `SOURCE_RANK` would let a plain "page" source silently
+outrank "portfolio" and break the Gemini-adjudication routing in classify.ts
+for a service page that happens to also be nav-linked (very common).
+
+**Two more real bugs found while verifying the fix**, both from the wider net
+the supplement casts:
+- Junk technical URLs (`/feed/`, `/.well-known/*`, `/wp-json/*`) leaked in
+  from homepage `<a href>` scraping, wasting content-fetch budget and
+  spamming Crawlee errors on non-HTML content types. Fixed with a
+  `NON_PAGE_PATH_RE` filter.
+- `/self-assessment` and `/self-assessment/` were counted as two separate
+  pages — no trailing-slash normalization. Fixed: paths now normalize to a
+  trailing slash (matching WordPress's own canonical URL convention) before
+  being deduped.
+
+**Classification (`classify.ts`):** added `injectables`/`skincare`/`wellness`
+to the `core` bucket's single-segment allowlist — same structural role as the
+already-listed `services`/`treatments`, just different label words a clinic
+chose. Exact-segment match only, so it can't false-positive inside an
+unrelated slug.
+
+**Verified:** all 6 originally-missing URLs now discovered and correctly
+classified/counted (4 → `core`, 2 → `store.categoryCount`, which went from
+undercounting to the correct 10). Re-ran the full 9-site regression: all
+objective checks still 100%, zero discrepancies. havenpmu.com's page count,
+which the discovery-supplement briefly over-counted (128 vs ground truth 117)
+before the trailing-slash/junk-path fixes landed, now reads 118 — within 1%.

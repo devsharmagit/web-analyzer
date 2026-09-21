@@ -28,11 +28,17 @@ const SECTIONS: Section[] = [
   // "/home-2/", "/contacts/" (plural) etc. confirmed live: WordPress sites
   // routinely have a duplicate/staging homepage ("home-2") or a slug variant
   // of "contact" that a strict allowlist misses entirely.
+  // "injectables"/"skincare"/"wellness" are common top-nav hub/category
+  // landing pages in this vertical (confirmed live: lunamedspawi.com links
+  // all three from its homepage nav) — the same structural role as the
+  // already-listed "services"/"treatments", just different label words a
+  // clinic chose. Exact single-segment match only (^...$), so this never
+  // catches "wellness" appearing inside a blog post slug elsewhere.
   { key: "core", label: "Core pages", scope: "required",
     test: (p) =>
       p === "/" ||
       /^\/home(-\d+)?\/?$/.test(p) ||
-      /^\/(about|about-us|team|our-team|staff|providers|contacts?|contact-us|services|treatments|menu)\/?$/.test(p) },
+      /^\/(about|about-us|team|our-team|staff|providers|contacts?|contact-us|services|treatments|menu|injectables|skincare|wellness)\/?$/.test(p) },
   // Must be a real location landing page ("medical spa near X"), not merely a URL
   // that happens to end in a state code — that matched 200+ blog posts.
   { key: "locations", label: "Location / local SEO", scope: "recommended",
