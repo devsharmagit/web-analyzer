@@ -76,8 +76,13 @@ async function fetchText(url: string, timeoutMs = 15000): Promise<string> {
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const r = await fetch(url, { redirect: "follow", signal: ctl.signal, headers: { "User-Agent": UA } });
-    return r.ok ? await r.text() : "";
-  } catch {
+    if (!r.ok) {
+      console.error(`fetchText: Failed to fetch ${url} - Status: ${r.status}`);
+      return "";
+    }
+    return await r.text();
+  } catch (err) {
+    console.error(`fetchText: Error fetching ${url}:`, err);
     return "";
   } finally {
     clearTimeout(timer);
@@ -106,11 +111,14 @@ export const titleFromPath = (p: string): string =>
 export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   const started = Date.now();
   const warnings: string[] = [];
+  console.log(`crawlSite: Starting crawl for ${siteUrl}`);
 
   let origin: string;
   try {
     origin = new URL(/^https?:\/\//i.test(siteUrl) ? siteUrl : "https://" + siteUrl).origin;
+    console.log(`crawlSite: Resolved origin to ${origin}`);
   } catch {
+    console.error(`crawlSite: Invalid URL: ${siteUrl}`);
     throw new Error(`Not a usable URL: ${siteUrl}`);
   }
 
@@ -139,6 +147,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   };
 
   // ---- sitemap discovery -------------------------------------------------
+  console.log(`crawlSite: Starting sitemap discovery for ${origin}`);
   let childSitemaps: string[] = [];
   let indexUsed = "";
   for (const cand of SITEMAP_CANDIDATES) {
@@ -156,6 +165,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     }
     if (childSitemaps.length) {
       indexUsed = cand;
+      console.log(`crawlSite: Found ${childSitemaps.length} sitemaps via ${cand}`);
       break;
     }
   }
@@ -171,6 +181,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   }
 
   const sitemapOnlyCount = found.size;
+  console.log(`crawlSite: Sitemap discovery completed. Found ${sitemapOnlyCount} URLs.`);
   let discoveredVia = childSitemaps.length ? "sitemap" : "homepage links";
   if (!sitemapOnlyCount) {
     if (childSitemaps.length) warnings.push("Sitemaps were found but yielded no usable URLs — fell back to homepage links.");
@@ -204,6 +215,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     if (!found.has(path)) add(rawUrl, source);
   };
 
+  console.log(`crawlSite: Fetching homepage links for ${origin}...`);
   const homeHtml = await fetchText(origin + "/");
   if (!homeHtml && !sitemapOnlyCount) warnings.push("Homepage could not be fetched either.");
   for (const m of homeHtml.matchAll(/href=["']([^"'#?]+)["']/gi)) {
@@ -223,6 +235,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   // to all 10 of its real product categories.
   const shopPage = [...found.values()].find((row) => /^\/(shop|store)\/?$/i.test(row.path));
   if (shopPage) {
+    console.log(`crawlSite: Found shop page at ${shopPage.url}, fetching categories...`);
     const shopHtml = await fetchText(shopPage.url);
     for (const m of shopHtml.matchAll(/href=["']([^"'#?]+)["']/gi)) {
       try {
@@ -255,13 +268,16 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
 
   if (!pages.length) warnings.push("No pages discovered at all — the site may be JS-rendered or blocking us.");
 
+  const totalPages = pages.filter((p) => p.isPage).length;
+  console.log(`crawlSite: Crawl completed in ${Date.now() - started}ms. Pages: ${totalPages}, Total URLs: ${found.size}`);
+
   return {
     origin,
     discoveredVia,
     sitemapIndex: indexUsed,
     sitemaps: childSitemaps,
     urlsSeen: found.size, // every URL, including non-pages
-    total: pages.filter((p) => p.isPage).length, // the headline "how many pages"
+    total: totalPages, // the headline "how many pages"
     pages,
     counts,
     warnings,
