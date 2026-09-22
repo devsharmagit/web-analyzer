@@ -297,10 +297,15 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
 
   // A specific, actionable warning when there's direct evidence of a block —
   // don't leave the employee guessing between "JS-rendered" and "blocking us"
-  // when the response codes already say which one it is.
+  // when the response codes already say which one it is. This REPLACES the
+  // warnings accumulated during discovery (e.g. "No sitemap found — page list
+  // is from homepage links only") rather than appending to them: those are
+  // misleading noise once we know EVERY fetch, including the homepage-link
+  // pass, was blocked — there is no "homepage links" fallback data to caveat.
   const allFetchesBlocked = totalFetches > 0 && blockedStatuses.length === totalFetches;
   if (allFetchesBlocked) {
     const codes = [...new Set(blockedStatuses)].join(", ");
+    warnings.length = 0;
     warnings.push(
       `This site returned HTTP ${codes} on every request — it appears to be actively blocking automated traffic (a WAF or bot-protection service, commonly one that blocks cloud/hosting-provider IP ranges). This site could not be analyzed from here; try checking it manually in a browser.`
     );
