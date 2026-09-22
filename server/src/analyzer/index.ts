@@ -3,6 +3,7 @@ import { detectPlatform, detectStore, type PlatformResult, type StoreResult } fr
 import { classifyPages, type TaxonomyResult } from "./classify.js";
 import { detectProviders, type ProvidersResult } from "./providers.js";
 import { detectLocations, type LocationsResult } from "./locations.js";
+import { detectBeforeAfterGallery, type BeforeAfterResult } from "./beforeAfter.js";
 
 export interface AnalyzeResult {
   url: string;
@@ -15,6 +16,7 @@ export interface AnalyzeResult {
   store: StoreResult;
   providers: ProvidersResult;
   locations: LocationsResult;
+  beforeAfterGallery: BeforeAfterResult;
   crawl: Pick<CrawlResult, "discoveredVia" | "sitemaps" | "urlsSeen" | "durationMs" | "warnings">;
 }
 
@@ -66,6 +68,15 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
 
   const store = detectStore(crawl.counts, platform.ecommerce);
 
+  // Depends on taxonomy.byType.beforeAfter, so it can't join the Promise.all
+  // above — it has to run after taxonomy resolves. Own timeout/fallback, same
+  // graceful-degradation contract as every other phase.
+  const beforeAfterGallery = await withTimeout(
+    detectBeforeAfterGallery(taxonomy.byType.beforeAfter?.urls || []),
+    30000,
+    { pageUrl: null, imageCount: 0, caseCount: "unknown" as const, confidence: "unknown" as const, evidence: [] }
+  );
+
   // Surface taxonomy's own warnings (internal timeouts on its slow steps) and
   // the outer-safety-net "reason" (if THAT fired instead) alongside crawl's —
   // one place in the response for "here's what you should not fully trust."
@@ -81,6 +92,7 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
     store,
     providers,
     locations,
+    beforeAfterGallery,
     crawl: {
       discoveredVia: crawl.discoveredVia,
       sitemaps: crawl.sitemaps,

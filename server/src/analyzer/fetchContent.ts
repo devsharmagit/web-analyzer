@@ -76,3 +76,101 @@ export async function fetchContentSignals(
   await crawler.run(urls);
   return results;
 }
+
+export interface ImageCandidate {
+  src: string;
+  alt: string;
+  title: string;
+  // The Elementor lightbox gallery groups related images with a shared id
+  // (confirmed live on ruma.com: aria-label="N of 8" + a shared
+  // data-elementor-lightbox-slideshow id across one gallery's images) — a
+  // useful case-boundary hint when present, but not universal (gloderma.com's
+  // before/after page has none at all).
+  lightboxGroup: string | null;
+}
+
+// Chrome a page's <header>/<nav>/<footer> commonly repeats site-wide (logos,
+// nav icons, social icons) — never the actual gallery content a before/after
+// page exists to show. Excluded at the DOM level, not just by filename, since
+// a logo file doesn't reliably self-identify by name.
+const CHROME_ANCESTOR_SELECTOR = "header, nav, footer";
+// Filename/class patterns for chrome that CAN slip outside header/nav/footer
+// (e.g. a mobile off-canvas menu duplicate, a floating widget).
+const CHROME_NAME_RE = /logo|icon|avatar|sprite|placeholder|spinner|loader/i;
+
+/** Fetch every real content `<img>` on a bounded list of pages, for case-counting a gallery. */
+export async function fetchImageCandidates(
+  urls: string[],
+  opts: { maxConcurrency?: number; timeoutSecs?: number } = {}
+): Promise<Map<string, ImageCandidate[]>> {
+  const results = new Map<string, ImageCandidate[]>();
+  if (!urls.length) return results;
+
+  const crawler = new CheerioCrawler({
+    maxConcurrency: opts.maxConcurrency ?? 5,
+    requestHandlerTimeoutSecs: opts.timeoutSecs ?? 15,
+    maxRequestRetries: 1,
+    async requestHandler({ request, $ }) {
+      const candidates: ImageCandidate[] = [];
+      const seenSrc = new Set<string>();
+      $("img").each((_i, el) => {
+        const $el = $(el);
+        if ($el.closest(CHROME_ANCESTOR_SELECTOR).length) return; // skip header/nav/footer chrome
+
+        // Lazy-loaded images commonly carry the real URL in data-src rather
+        // than src (a 1x1 placeholder sits in src until JS swaps it in).
+        const src = $el.attr("src") || $el.attr("data-src") || $el.attr("data-lazy-src") || "";
+        if (!src || src.startsWith("data:")) return;
+        if (/\.svg(\?|$)/i.test(src)) return; // icons/decorative, never a photo
+        if (CHROME_NAME_RE.test(src)) return;
+
+        const alt = $el.attr("alt") || "";
+        const title = $el.attr("title") || "";
+        if (CHROME_NAME_RE.test(alt) || CHROME_NAME_RE.test(title)) return;
+
+        // A tiny declared size is a tracking pixel or spacer, not a photo.
+        const w = parseInt($el.attr("width") || "", 10);
+        const h = parseInt($el.attr("height") || "", 10);
+        if (w > 0 && w <= 10 && h > 0 && h <= 10) return;
+
+        const lightboxGroup = $el.closest("[data-elementor-lightbox-slideshow]").attr("data-elementor-lightbox-slideshow") || null;
+        seenSrc.add(src);
+        candidates.push({ src, alt, title, lightboxGroup });
+      });
+
+      // Elementor's native Gallery widget (as opposed to the older
+      // image-with-lightbox pattern above) renders each photo as an <a> with
+      // a CSS background-image on a nested <div> — NOT an <img> tag at all.
+      // Confirmed live: trubeautybytrevor.com's before/after gallery is built
+      // this way entirely; the <img> pass above found only 2 unrelated
+      // images (a logo, twice) and missed the actual gallery completely.
+      $("a[data-elementor-lightbox-slideshow]").each((_i, el) => {
+        const $el = $(el);
+        if ($el.closest(CHROME_ANCESTOR_SELECTOR).length) return;
+
+        const src = $el.attr("href") || "";
+        if (!src || seenSrc.has(src)) return; // dedupe against the <img> pass
+        if (/\.svg(\?|$)/i.test(src)) return;
+        if (CHROME_NAME_RE.test(src)) return;
+
+        const title = $el.attr("data-elementor-lightbox-title") || "";
+        // The gallery widget's own aria-label (on the nested background-image
+        // div) carries the closest thing to alt text this pattern has —
+        // confirmed live: aria-label="women lip filler" on trubeautybytrevor.
+        const alt = $el.find("[aria-label]").first().attr("aria-label") || "";
+        if (CHROME_NAME_RE.test(alt) || CHROME_NAME_RE.test(title)) return;
+
+        seenSrc.add(src);
+        candidates.push({ src, alt, title, lightboxGroup: $el.attr("data-elementor-lightbox-slideshow") || null });
+      });
+
+      results.set(request.url, candidates);
+    },
+    failedRequestHandler({ request }) {
+      results.set(request.url, []);
+    },
+  });
+
+  await crawler.run(urls);
+  return results;
+}
