@@ -20,6 +20,13 @@ server/validation/out/
 # Crawlee's ephemeral request-queue/dataset storage
 server/.crawlee-storage/
 
+# local AI-tool skill/config files (installed per-machine by whatever agent
+# tool is in use — not application code, ~2.5MB of skill docs/scripts that
+# don't belong in version control)
+.agents/
+.claude/
+skills-lock.json
+
 # logs / os
 *.log
 .DS_Store
