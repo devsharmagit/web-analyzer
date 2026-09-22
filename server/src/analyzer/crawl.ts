@@ -9,7 +9,17 @@
 //   3. Products, product categories and videos are separated from real pages so
 //      they can never inflate the headline page count.
 
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+// Honest, identifiable bot UA (same shape as Googlebot's own — a name plus a
+// contact/info URL), not a spoofed browser string. A prior version of this
+// file impersonated a real Chrome/Windows browser specifically to "bypass
+// WAFs" — reverted: (1) it doesn't even work against the actual block this
+// vertical hits in practice (Cloudflare/hosting-provider blocking by IP/ASN,
+// confirmed live — ruma.com 403'd EVERY request from Render's IP regardless
+// of UA, while working fine from other networks), and (2) deliberately
+// disguising automated traffic to get past a site's bot-detection is a
+// posture this tool doesn't take. See the 403-detection warning below for
+// how a real block like this is now surfaced instead.
+const UA = "Mozilla/5.0 (compatible; G99WebAnalyzer/1.0; +https://github.com/devsharmagit/web-analyzer)";
 const SITEMAP_CANDIDATES = ["/sitemap.xml", "/wp-sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml"];
 const MAX_CHILD_SITEMAPS = 25;
 const ASSET_RE = /\.(xml|kml|jpe?g|png|webp|gif|svg|pdf|css|js|ico|zip|mp4|webm|json|webmanifest)$/i;
@@ -71,11 +81,18 @@ export interface CrawlResult {
   durationMs: number;
 }
 
-async function fetchText(url: string, timeoutMs = 15000): Promise<string> {
+// Status codes that specifically mean "a WAF/bot-protection service is
+// blocking us" rather than "this URL doesn't exist" or "transient network
+// error" — worth a distinct, actionable warning instead of the generic
+// catch-all "may be JS-rendered or blocking us".
+const BLOCKED_STATUSES = new Set([401, 403, 429, 503]);
+
+async function fetchText(url: string, timeoutMs = 15000, onStatus?: (status: number) => void): Promise<string> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const r = await fetch(url, { redirect: "follow", signal: ctl.signal, headers: { "User-Agent": UA } });
+    onStatus?.(r.status);
     if (!r.ok) {
       console.error(`fetchText: Failed to fetch ${url} - Status: ${r.status}`);
       return "";
@@ -112,6 +129,18 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   const started = Date.now();
   const warnings: string[] = [];
   console.log(`crawlSite: Starting crawl for ${siteUrl}`);
+
+  // Tracks every fetch that came back with a blocking status (401/403/429/503)
+  // across sitemap/homepage/shop-page requests, so a real WAF/bot-protection
+  // block can be reported specifically instead of the generic "may be
+  // JS-rendered or blocking us" catch-all. Confirmed live: ruma.com returned
+  // 403 on every single request from Render's production IP.
+  const blockedStatuses: number[] = [];
+  let totalFetches = 0;
+  const trackStatus = (status: number) => {
+    totalFetches++;
+    if (BLOCKED_STATUSES.has(status)) blockedStatuses.push(status);
+  };
 
   let origin: string;
   try {
@@ -151,7 +180,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   let childSitemaps: string[] = [];
   let indexUsed = "";
   for (const cand of SITEMAP_CANDIDATES) {
-    const xml = await fetchText(origin + cand);
+    const xml = await fetchText(origin + cand, undefined, trackStatus);
     if (!xml) continue;
     const locs = locsOf(xml);
     const children = locs.filter((l) => /\.xml$/i.test(l));
@@ -172,7 +201,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
 
   for (const sm of childSitemaps) {
     const source = sourceOfSitemap(sm);
-    const xml = await fetchText(sm);
+    const xml = await fetchText(sm, undefined, trackStatus);
     if (!xml) {
       warnings.push(`Could not read sitemap: ${sm}`);
       continue;
@@ -216,7 +245,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   };
 
   console.log(`crawlSite: Fetching homepage links for ${origin}...`);
-  const homeHtml = await fetchText(origin + "/");
+  const homeHtml = await fetchText(origin + "/", undefined, trackStatus);
   if (!homeHtml && !sitemapOnlyCount) warnings.push("Homepage could not be fetched either.");
   for (const m of homeHtml.matchAll(/href=["']([^"'#?]+)["']/gi)) {
     try {
@@ -236,7 +265,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   const shopPage = [...found.values()].find((row) => /^\/(shop|store)\/?$/i.test(row.path));
   if (shopPage) {
     console.log(`crawlSite: Found shop page at ${shopPage.url}, fetching categories...`);
-    const shopHtml = await fetchText(shopPage.url);
+    const shopHtml = await fetchText(shopPage.url, undefined, trackStatus);
     for (const m of shopHtml.matchAll(/href=["']([^"'#?]+)["']/gi)) {
       try {
         const linked = new URL(m[1]!, origin);
@@ -266,7 +295,18 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   const counts: Record<string, number> = {};
   for (const p of pages) counts[p.source] = (counts[p.source] || 0) + 1;
 
-  if (!pages.length) warnings.push("No pages discovered at all — the site may be JS-rendered or blocking us.");
+  // A specific, actionable warning when there's direct evidence of a block —
+  // don't leave the employee guessing between "JS-rendered" and "blocking us"
+  // when the response codes already say which one it is.
+  const allFetchesBlocked = totalFetches > 0 && blockedStatuses.length === totalFetches;
+  if (allFetchesBlocked) {
+    const codes = [...new Set(blockedStatuses)].join(", ");
+    warnings.push(
+      `This site returned HTTP ${codes} on every request — it appears to be actively blocking automated traffic (a WAF or bot-protection service, commonly one that blocks cloud/hosting-provider IP ranges). This site could not be analyzed from here; try checking it manually in a browser.`
+    );
+  } else if (!pages.length) {
+    warnings.push("No pages discovered at all — the site may be JS-rendered or blocking us.");
+  }
 
   const totalPages = pages.filter((p) => p.isPage).length;
   console.log(`crawlSite: Crawl completed in ${Date.now() - started}ms. Pages: ${totalPages}, Total URLs: ${found.size}`);
