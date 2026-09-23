@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { analyze, type AnalyzeResult, type Detection } from "./api";
 import { oneLineSummary, toClipboardText } from "./summarize";
+import { generateReportHtml } from "./report";
 import { motion, AnimatePresence } from "motion/react";
 import {
   MagnifyingGlass,
@@ -16,7 +17,8 @@ import {
   Sun,
   Moon,
   ChartBar,
-  Warning
+  Warning,
+  DownloadSimple
 } from "@phosphor-icons/react";
 
 const PROGRESS_STAGES = [
@@ -280,7 +282,7 @@ function Dashboard({ result }: { result: AnalyzeResult }) {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
             >
-              <TabPages pages={result.pages} />
+              <TabPages pages={result.pages} beforeAfterGallery={result.beforeAfterGallery} />
             </motion.div>
           )}
           {activeTab === "providers" && (
@@ -340,8 +342,8 @@ function TabOverview({ result }: { result: AnalyzeResult }) {
         {crawl.warnings.length > 0 && (
           <section>
             <SectionHeading>Warnings</SectionHeading>
-            <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
-              <ul className="list-inside list-disc space-y-2 text-sm text-amber-800 dark:text-amber-400">
+            <div className="mt-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5">
+              <ul className="list-inside list-disc space-y-2 text-sm text-[var(--color-text)]">
                 {crawl.warnings.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
@@ -387,25 +389,25 @@ function TabOverview({ result }: { result: AnalyzeResult }) {
   );
 }
 
-function TabPages({ pages }: { pages: AnalyzeResult["pages"] }) {
+function TabPages({ pages, beforeAfterGallery }: { pages: AnalyzeResult["pages"]; beforeAfterGallery: AnalyzeResult["beforeAfterGallery"] }) {
   const uncertainBucket = pages.byType["uncertain"];
   const uncertainUrls = uncertainBucket ? uncertainBucket.urls : [];
-  
+
   return (
     <div className="space-y-8">
       {pages.uncertainCount > 0 && (
-        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 md:p-6 shadow-sm">
-          <div className="flex items-start md:items-center gap-3 text-amber-700 dark:text-amber-400 font-medium">
-            <Warning weight="fill" className="h-5 w-5 mt-0.5 md:mt-0 flex-shrink-0" />
+        <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5 md:p-6 shadow-sm">
+          <div className="flex items-start md:items-center gap-3 text-[var(--color-text)] font-medium">
+            <Warning weight="fill" className="h-5 w-5 mt-0.5 md:mt-0 flex-shrink-0 opacity-70" />
             <span>{pages.uncertainCount} pages could not be classified with confidence.</span>
           </div>
           {uncertainUrls.length > 0 && (
-            <div className="mt-4 border-t border-amber-500/20 pt-4">
-              <p className="text-sm font-medium text-amber-800 dark:text-amber-300 mb-3">Unclassified URLs:</p>
-              <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2 text-xs text-amber-800 dark:text-amber-300 max-h-48 overflow-y-auto custom-scrollbar pr-2">
+            <div className="mt-4 border-t border-[var(--color-border)] pt-4">
+              <p className="text-sm font-medium text-[var(--color-muted)] mb-3">Unclassified URLs:</p>
+              <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2 text-xs text-[var(--color-text)] max-h-48 overflow-y-auto custom-scrollbar pr-2">
                 {uncertainUrls.map((u) => (
                   <li key={u} className="truncate">
-                    <a href={u} target="_blank" rel="noreferrer" className="hover:underline hover:text-amber-800 dark:hover:text-amber-200">{u}</a>
+                    <a href={u} target="_blank" rel="noreferrer" className="hover:underline hover:text-[var(--color-accent)]">{u}</a>
                   </li>
                 ))}
               </ul>
@@ -424,6 +426,16 @@ function TabPages({ pages }: { pages: AnalyzeResult["pages"] }) {
                 <span className="font-semibold capitalize text-[var(--color-text)]">{type}</span>
                 <span className="rounded-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2.5 py-0.5 text-xs font-semibold">{bucket.count}</span>
               </div>
+              {type === "beforeAfter" && typeof beforeAfterGallery.caseCount === "number" && (
+                <div
+                  className="border-b border-[var(--color-border)]/50 bg-[var(--color-bg)]/30 px-5 py-2.5 text-xs text-[var(--color-muted)]"
+                  title={beforeAfterGallery.evidence.join(" ")}
+                >
+                  <b className="text-[var(--color-text)]">{beforeAfterGallery.caseCount}</b> distinct before/after case
+                  {beforeAfterGallery.caseCount === 1 ? "" : "s"} ({beforeAfterGallery.imageCount} images)
+                  {beforeAfterGallery.confidence === "unknown" && " — estimated"}
+                </div>
+              )}
               <ul className="flex-1 overflow-y-auto px-5 py-4 text-xs max-h-56 custom-scrollbar">
                 {bucket.urls.slice(0, 50).map((u) => (
                   <li key={u} className="py-1.5 border-b border-[var(--color-border)]/30 last:border-0">
@@ -546,6 +558,39 @@ function SummaryBanner({ result }: { result: AnalyzeResult }) {
     setTimeout(() => setStatus("idle"), 2500);
   }
 
+  const [downloading, setDownloading] = useState(false);
+
+  function onDownload() {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      // Generate a complete standalone HTML document
+      const html = generateReportHtml(result, { standalone: true });
+
+      // Create a Blob URL and open it in a new tab
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const blobUrl = URL.createObjectURL(blob);
+      const win = window.open(blobUrl, "_blank");
+
+      // Clean up the blob URL after a delay (the new window has its own reference)
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+
+      if (!win) {
+        // Popup was blocked — fall back to a direct download of the HTML file
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        const host = result.url.replace(/^https?:\/\//i, "").replace(/[^a-z0-9.-]/gi, "-");
+        const date = new Date().toISOString().slice(0, 10);
+        a.download = `website-analysis-${host}-${date}.html`;
+        a.click();
+      }
+    } catch (err) {
+      console.error("Report generation error:", err);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   return (
     <div className="relative overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6 shadow-sm">
       <div className="absolute -right-20 -top-20 h-48 w-48 rounded-full bg-[var(--color-accent)]/10 blur-3xl pointer-events-none" />
@@ -553,23 +598,42 @@ function SummaryBanner({ result }: { result: AnalyzeResult }) {
         <p className="text-base font-medium leading-relaxed text-[var(--color-text)] flex-1">
           {oneLineSummary(result)}
         </p>
-        <button
-          type="button"
-          onClick={onCopy}
-          className="flex-shrink-0 flex items-center justify-center gap-2 rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] px-5 py-2.5 text-sm font-medium text-[var(--color-text)] shadow-sm transition hover:bg-[var(--color-border)]/50 active:scale-95"
-        >
-          {status === "copied" ? (
-            <>
-              <CheckCircle weight="fill" className="text-emerald-500 h-4 w-4" /> Copied
-            </>
-          ) : status === "failed" ? (
-            "Couldn't copy"
-          ) : (
-            <>
-              <Copy weight="bold" className="h-4 w-4" /> Copy summary
-            </>
-          )}
-        </button>
+        <div className="flex flex-shrink-0 gap-2.5">
+          <button
+            type="button"
+            onClick={onDownload}
+            disabled={downloading}
+            className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] px-5 py-2.5 text-sm font-medium text-[var(--color-text)] shadow-sm transition hover:bg-[var(--color-border)]/50 active:scale-95 disabled:opacity-60"
+          >
+            {downloading ? (
+              <>
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-text)] border-t-transparent" />
+                <span>Preparing report...</span>
+              </>
+            ) : (
+              <>
+                <DownloadSimple weight="bold" className="h-4 w-4" /> Download PDF Report
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onCopy}
+            className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] px-5 py-2.5 text-sm font-medium text-[var(--color-text)] shadow-sm transition hover:bg-[var(--color-border)]/50 active:scale-95"
+          >
+            {status === "copied" ? (
+              <>
+                <CheckCircle weight="fill" className="text-emerald-500 h-4 w-4" /> Copied
+              </>
+            ) : status === "failed" ? (
+              "Couldn't copy"
+            ) : (
+              <>
+                <Copy weight="bold" className="h-4 w-4" /> Copy summary
+              </>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -579,7 +643,7 @@ function Tile({ label, value, icon }: { label: string; value: string | number; i
   return (
     <div className="flex flex-col justify-between rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] p-5 shadow-sm">
       <div className="flex items-center gap-2 text-[var(--color-muted)] mb-3">
-        {icon && <span className="opacity-70">{icon}</span>}
+        {icon && <span>{icon}</span>}
         <div className="text-[10px] font-bold uppercase tracking-wider">{label}</div>
       </div>
       <div className="text-2xl font-semibold tracking-tight text-[var(--color-text)]">{value}</div>
@@ -588,9 +652,9 @@ function Tile({ label, value, icon }: { label: string; value: string | number; i
 }
 
 const CONFIDENCE_COLOR: Record<Detection["confidence"], string> = {
-  high: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20",
-  likely: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
-  unknown: "bg-[var(--color-border)]/30 text-[var(--color-muted)] border-[var(--color-border)] opacity-80",
+  high: "bg-[var(--color-bg)] border-[var(--color-border)] text-[var(--color-text)]",
+  likely: "bg-[var(--color-bg)] border-[var(--color-border)] text-[var(--color-text)]",
+  unknown: "bg-[var(--color-border)]/30 text-[var(--color-muted)] border-[var(--color-border)]",
 };
 
 function Badge({ label, d }: { label: string; d: Detection }) {
@@ -599,7 +663,7 @@ function Badge({ label, d }: { label: string; d: Detection }) {
       className={`flex flex-col justify-between rounded-xl border p-4 ${CONFIDENCE_COLOR[d.confidence]}`}
       title={d.evidence.join("; ")}
     >
-      <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">{label}</span>
+      <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-muted)]">{label}</span>
       <span className="mt-1.5 text-sm font-semibold">{d.value ?? "Unknown"}</span>
     </div>
   );

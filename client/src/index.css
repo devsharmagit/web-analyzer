@@ -17,7 +17,7 @@
   --bg: #ffffff;
   --panel: #f4f4f5;
   --border: #e4e4e7;
-  --muted: #71717a;
+  --muted: #52525b; /* Darkened from #71717a for better contrast */
   --text: #18181b;
   /* Accent: Cobalt Blue */
   --accent: #2563eb;

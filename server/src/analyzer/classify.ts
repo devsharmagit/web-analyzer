@@ -57,7 +57,7 @@ const SECTIONS: Section[] = [
   // confirmed against real sites (conqraesthetics /gallery/, drippynursejess
   // /results/ were both misrouted to "proof" before this widened match).
   { key: "beforeAfter", label: "Before & after", scope: "recommended",
-    test: (p) => /(before-and-after|before-after|b-a-gallery|results-gallery|\bgallery\b|\bresults\b)/.test(p) },
+    test: (p) => /(before-and-after|before-after|b-a-gallery|results-gallery|\bgallery\b|\bresults\b|\bphotos?\b)/.test(p) },
   // Condition vocabulary: what the patient HAS, not what the clinic DOES.
   // Checked before "service" below so condition words win when a URL is
   // otherwise ambiguous, but see the location-suffix guard in classifyPage —

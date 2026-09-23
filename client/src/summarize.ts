@@ -70,7 +70,14 @@ export function toClipboardText(result: AnalyzeResult): string {
 
   lines.push(`Pages: ${pages.total} total`);
   const byType = Object.entries(pages.byType).sort((a, b) => b[1].count - a[1].count);
-  for (const [type, bucket] of byType) lines.push(`  - ${type}: ${bucket.count}`);
+  const { beforeAfterGallery } = result;
+  for (const [type, bucket] of byType) {
+    const baNote =
+      type === "beforeAfter" && typeof beforeAfterGallery.caseCount === "number"
+        ? ` (${beforeAfterGallery.caseCount} distinct cases, ${beforeAfterGallery.imageCount} images)`
+        : "";
+    lines.push(`  - ${type}: ${bucket.count}${baNote}`);
+  }
   lines.push("");
 
   lines.push(`Providers: ${typeof providers.count === "number" ? providers.count : "unknown"}`);

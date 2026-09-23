@@ -33,6 +33,7 @@ export interface BeforeAfterResult {
   caseCount: number | "unknown";
   confidence: Confidence;
   evidence: string[];
+  images: string[];
   reason?: string;
 }
 
@@ -42,6 +43,7 @@ const EMPTY: BeforeAfterResult = {
   caseCount: "unknown",
   confidence: "unknown",
   evidence: [],
+  images: [],
 };
 
 function filenameOf(src: string): string {
@@ -127,6 +129,7 @@ export async function detectBeforeAfterGallery(beforeAfterPageUrls: string[]): P
 
   const byFilename = groupByFilename(allImages);
   const imageCount = allImages.length;
+  const imageUrls = allImages.map(img => img.src);
 
   // Two conditions call for AI adjudication instead of trusting the
   // deterministic filename grouping:
@@ -149,6 +152,7 @@ export async function detectBeforeAfterGallery(beforeAfterPageUrls: string[]): P
         caseCount: ai.caseCount,
         confidence: "unknown", // AI-derived — never claim "high" for a judgment call
         evidence: [ai.evidence, `${imageCount} candidate images considered (filename grouping alone was inconclusive)`],
+        images: imageUrls,
       };
     }
     // AI unavailable/failed — fall through to the deterministic guess below,
@@ -159,6 +163,7 @@ export async function detectBeforeAfterGallery(beforeAfterPageUrls: string[]): P
       caseCount: byFilename.caseCount,
       confidence: "unknown",
       evidence: [`Filename grouping alone found ${byFilename.caseCount} cases across ${imageCount} images, but AI adjudication was unavailable to double-check — treat this as a rough estimate.`],
+      images: imageUrls,
       reason: geminiAvailable() ? "AI adjudication failed" : "AI adjudication unavailable (no GEMINI_KEYS configured)",
     };
   }
@@ -178,5 +183,6 @@ export async function detectBeforeAfterGallery(beforeAfterPageUrls: string[]): P
     evidence: collapsedSomeImages
       ? [`Grouped ${imageCount} images into ${byFilename.caseCount} cases by matching filename patterns (e.g. shared base name with a trailing "-a"/"-b"/"-1" suffix).`]
       : [`${imageCount} images found, each with a distinct filename — no same-case grouping signal detected, so each is counted as its own case.`],
+    images: imageUrls,
   };
 }

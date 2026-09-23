@@ -11,7 +11,30 @@
 // target site bounded.
 
 import "./crawleeBootstrap.js";
-import { CheerioCrawler } from "crawlee";
+import { CheerioCrawler, RequestQueue } from "crawlee";
+import { randomUUID } from "node:crypto";
+
+// Crawlee's default (unnamed) RequestQueue persists request-fingerprint dedup
+// state on disk across separate crawler.run() calls within the same process
+// — confirmed live: calling this twice in a row for the exact same URL, the
+// SECOND call silently returned zero results (the queue considered the URL
+// "already handled"). Since this server is long-running and the same site
+// can genuinely be re-analyzed within one process's uptime, that would
+// silently degrade accuracy on any repeat analysis, not just an edge case.
+// Fix: every crawler run gets its own freshly-named, disposed-after-use
+// queue, so no state can ever leak between calls.
+async function runIsolatedCrawler(
+  urls: string[],
+  crawlerOptions: ConstructorParameters<typeof CheerioCrawler>[0]
+): Promise<void> {
+  const queue = await RequestQueue.open(randomUUID());
+  try {
+    const crawler = new CheerioCrawler({ ...crawlerOptions, requestQueue: queue });
+    await crawler.run(urls);
+  } finally {
+    await queue.drop().catch(() => {});
+  }
+}
 
 export interface ContentSignals {
   title: string;
@@ -41,7 +64,7 @@ export async function fetchContentSignals(
   const results = new Map<string, ContentSignals>();
   if (!urls.length) return results;
 
-  const crawler = new CheerioCrawler({
+  await runIsolatedCrawler(urls, {
     maxConcurrency: opts.maxConcurrency ?? 5,
     requestHandlerTimeoutSecs: opts.timeoutSecs ?? 12,
     maxRequestRetries: 1,
@@ -73,7 +96,6 @@ export async function fetchContentSignals(
     },
   });
 
-  await crawler.run(urls);
   return results;
 }
 
@@ -106,7 +128,7 @@ export async function fetchImageCandidates(
   const results = new Map<string, ImageCandidate[]>();
   if (!urls.length) return results;
 
-  const crawler = new CheerioCrawler({
+  await runIsolatedCrawler(urls, {
     maxConcurrency: opts.maxConcurrency ?? 5,
     requestHandlerTimeoutSecs: opts.timeoutSecs ?? 15,
     maxRequestRetries: 1,
@@ -171,6 +193,5 @@ export async function fetchImageCandidates(
     },
   });
 
-  await crawler.run(urls);
   return results;
 }

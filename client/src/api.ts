@@ -55,6 +55,16 @@ export interface LocationsResult {
   reason?: string;
 }
 
+export interface BeforeAfterGalleryResult {
+  pageUrl: string | null;
+  imageCount: number;
+  caseCount: number | "unknown";
+  confidence: Confidence;
+  evidence: string[];
+  images: string[];
+  reason?: string;
+}
+
 export interface AnalyzeResult {
   url: string;
   platform: PlatformResult;
@@ -66,6 +76,7 @@ export interface AnalyzeResult {
   store: StoreResult;
   providers: ProvidersResult;
   locations: LocationsResult;
+  beforeAfterGallery: BeforeAfterGalleryResult;
   crawl: {
     discoveredVia: string;
     sitemaps: string[];
