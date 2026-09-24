@@ -90,7 +90,13 @@ async function adjudicateWithAi(images: ImageCandidate[]): Promise<{ caseCount: 
     .slice(0, MAX_AI_CANDIDATES)
     .map((img, i) => `${i + 1}. ${filenameOf(img.src)} :: alt="${img.alt}" title="${img.title}"`)
     .join("\n");
-  const prompt = `This is a list of images found on a med-spa's "before & after" results page. Some may NOT actually be before/after result photos (they could be unrelated gallery images, staff photos, testimonials, etc. that slipped through) — exclude those. Among the genuine before/after photos, group multiple photos of the SAME patient/case together (e.g. different angles or a before shot + an after shot of one person count as ONE case).
+  const prompt = `This is a list of images found on a med-spa's "before & after" results page. Some may NOT actually be before/after result photos (they could be unrelated gallery images, staff photos, testimonials, promotional CTA banners, etc. that slipped through) — exclude those.
+Among the genuine before/after photos, count the number of DISTINCT patient cases.
+IMPORTANT RULES:
+1. An image that shows a combined side-by-side Before & After comparison of one patient is ONE distinct case.
+2. If images have distinct case numbers or number words like 'one', 'two', 'three', '1', '2', '3' (e.g. 'Lip-Filler-one', 'Lip-Filler-two', 'Lip-Filler-three', ...), each numbered entry is an independent, distinct patient case, NOT multiple angles of the same person.
+3. Only group multiple photos together if they are explicitly different angles or separate before/after parts of the EXACT SAME patient case (for example: 'patient1-front' and 'patient1-side', or 'caseA_before' and 'caseA_after').
+4. Be precise and count carefully. Do NOT underestimate or round down.
 
 Respond with ONLY a JSON object like:
 {"caseCount": 12, "evidence": "one short sentence explaining your reasoning"}

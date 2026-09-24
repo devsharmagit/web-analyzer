@@ -60,11 +60,13 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
   const categoriesCount = Object.keys(pages.byType).filter(k => pages.byType[k]?.urls?.length > 0).length;
   const cmsName = platform.cms.value || "Custom / Jamstack";
   const builderName = platform.builder.value;
-  const storeStatus = store.hasStore 
-    ? `Active (${store.platform || "Custom"}, ${store.productCount} products)` 
-    : store.platform 
-      ? `Installed (${store.platform})` 
-      : "None detected";
+  const storeStatus = store.isThirdParty
+    ? `Third-Party Integration (${store.thirdPartyIntegrations?.join(", ") || "External"})`
+    : store.hasStore 
+      ? `Active (${store.platform || "Custom"}, ${store.productCount} products)` 
+      : store.platform 
+        ? `Installed (${store.platform})` 
+        : "None detected";
   
   const providersCountText = providers.count === "unknown" 
     ? "Unknown" 
@@ -96,7 +98,11 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
       <div class="pdf-card pdf-avoid-break" style="width: calc(50% - 12px); box-sizing: border-box; page-break-inside: avoid; break-inside: avoid;">
         <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">E-Commerce Architecture</div>
         <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin: 8px 0 4px 0;">${escapeHtml(storeStatus)}</div>
-        ${store.hasStore ? `<div style="font-size: 11px; color: #64748b; line-height: 1.5;">Catalog: ${store.productCount} products across ${store.categoryCount} categories</div>` : ""}
+        ${store.isThirdParty 
+          ? `<div style="font-size: 11px; color: #64748b; line-height: 1.5;">${escapeHtml(store.notes || "Products are fulfilled via external partner portals rather than a native self-hosted cart.")}</div>`
+          : store.hasStore 
+            ? `<div style="font-size: 11px; color: #64748b; line-height: 1.5;">Catalog: ${store.productCount} products across ${store.categoryCount} categories</div>` 
+            : ""}
       </div>
       <div class="pdf-card pdf-avoid-break" style="width: calc(50% - 12px); box-sizing: border-box; page-break-inside: avoid; break-inside: avoid;">
         <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Crawl & Sitemap Audit</div>
@@ -235,17 +241,18 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
   sitemapHtml += `</div>`;
 
   // Warnings
-  const warningsHtml = crawl.warnings.length > 0
+  const visibleWarnings = crawl.warnings.filter(w => !/sitemap/i.test(w));
+  const warningsHtml = visibleWarnings.length > 0
     ? `<div class="pdf-warning-box pdf-avoid-break" style="border: 1px solid #e2e8f0; border-left: 3px solid #94a3b8; padding: 20px 24px; margin-top: 32px; page-break-inside: avoid; break-inside: avoid;">
         <div style="font-size: 11px; font-weight: 700; color: #475569; text-transform: uppercase; margin-bottom: 12px; letter-spacing: 0.05em;">Analysis Advisory & Notice</div>
         <ul style="margin: 0; padding-left: 18px; font-size: 13px; color: #1e293b; line-height: 1.6;">
-          ${crawl.warnings.map(w => `<li style="margin-bottom: 6px;">${escapeHtml(w)}</li>`).join("")}
+          ${visibleWarnings.map(w => `<li style="margin-bottom: 6px;">${escapeHtml(w)}</li>`).join("")}
         </ul>
       </div>`
     : "";
 
   const bodyHtml = `
-<div class="pdf-report-root" style="width: 100%; max-width: 820px; margin: 0 auto; background: #ffffff; color: #1e293b; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; line-height: 1.6; box-sizing: border-box; padding: 0;">
+<div class="pdf-report-root" style="width: 100%; max-width: 700px; margin: 0 auto; background: #ffffff; color: #1e293b; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; line-height: 1.6; box-sizing: border-box; padding: 0;">
   
   <!-- Executive Cover Header -->
   <header class="report-header pdf-avoid-break" style="background: #ffffff; border: 1px solid #e2e8f0; border-top: 4px solid #0f172a; padding: 40px 48px; margin-bottom: 32px; page-break-inside: avoid; break-inside: avoid;">
@@ -255,8 +262,8 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
     
     <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px; padding-top: 24px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #475569;">
       <div><strong style="color: #0f172a;">Analyzed:</strong> ${escapeHtml(generatedAt)}</div>
-      <div><strong style="color: #0f172a;">Sitemap Status:</strong> ${escapeHtml(crawl.discoveredVia || "Verified")}</div>
-      <div><strong style="color: #0f172a;">URLs Discovered:</strong> ${crawl.urlsSeen}</div>
+      <div><strong style="color: #0f172a;">Discovery:</strong> ${escapeHtml(crawl.discoveredVia || "Verified")}</div>
+      <div><strong style="color: #0f172a;">Total Pages:</strong> ${totalUrls}</div>
     </div>
   </header>
 
@@ -280,8 +287,8 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
     </div>
     <div class="kpi-card" style="flex: 1 1 0; min-width: 0; padding: 0 16px; border-left: 1px solid #e2e8f0; box-sizing: border-box;">
       <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; color: #64748b; margin-bottom: 8px;">E-Commerce</div>
-      <div style="font-size: 18px; font-weight: 700; color: #0f172a; line-height: 1.2; margin-bottom: 4px;">${store.hasStore ? "Active" : store.platform ? "Installed" : "None"}</div>
-      <div style="font-size: 12px; color: #475569;">${store.productCount > 0 ? `${store.productCount} products` : "No products found"}</div>
+      <div style="font-size: 18px; font-weight: 700; color: #0f172a; line-height: 1.2; margin-bottom: 4px;">${store.isThirdParty ? "Third-Party" : store.hasStore ? "Active" : store.platform ? "Installed" : "None"}</div>
+      <div style="font-size: 12px; color: #475569;">${store.isThirdParty ? (store.thirdPartyIntegrations?.join(", ") || "External Portal") : store.productCount > 0 ? `${store.productCount} products` : "No products found"}</div>
     </div>
     <div class="kpi-card" style="flex: 1 1 0; min-width: 0; padding: 0 16px; border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0; box-sizing: border-box;">
       <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; color: #64748b; margin-bottom: 8px;">Medical Staff</div>
@@ -405,19 +412,7 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
   </style>
 </head>
 <body>
-  <div class="no-print" style="background: #1e293b; color: #e2e8f0; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; font-family: sans-serif; font-size: 13px; position: sticky; top: 0; z-index: 100;">
-    <span>📄 <strong>WebAnalyzer Report</strong> — ${escapeHtml(url)}</span>
-    <button onclick="window.print()" style="background: #2563eb; color: #ffffff; border: none; border-radius: 8px; padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#1d4ed8'" onmouseout="this.style.background='#2563eb'">
-      ⬇ Save as PDF (Ctrl+P)
-    </button>
-  </div>
   ${bodyHtml}
-  <script>
-    // Auto-trigger print dialog after a short delay to allow images to load
-    window.addEventListener('load', function() {
-      setTimeout(function() { window.print(); }, 800);
-    });
-  </script>
 </body>
 </html>`;
 }

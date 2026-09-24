@@ -20,6 +20,9 @@ export interface StoreResult {
   platform: string | null;
   productCount: number;
   categoryCount: number;
+  isThirdParty?: boolean;
+  thirdPartyIntegrations?: string[];
+  notes?: string;
 }
 
 export interface TypeBucket {

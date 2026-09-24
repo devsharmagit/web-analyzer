@@ -29,6 +29,12 @@ function locationPhrase(result: AnalyzeResult): string {
 
 function storePhrase(result: AnalyzeResult): string {
   const { store } = result;
+  if (store.isThirdParty) {
+    const list = store.thirdPartyIntegrations && store.thirdPartyIntegrations.length > 0
+      ? ` (${store.thirdPartyIntegrations.join(", ")})`
+      : "";
+    return `third-party store integration${list}`;
+  }
   if (store.hasStore) return `store (${store.platform ?? "unknown platform"}, ${store.productCount} products)`;
   return "no active store";
 }
@@ -62,9 +68,15 @@ export function toClipboardText(result: AnalyzeResult): string {
   lines.push("");
 
   lines.push(`Platform: ${platform.cms.value ?? "unknown"}${platform.builder.value ? ` + ${platform.builder.value}` : ""}`);
-  lines.push(`E-commerce: ${platform.ecommerce.value ?? "none detected"}`);
+  lines.push(`E-commerce: ${store.isThirdParty ? `Third-party integration (${store.thirdPartyIntegrations?.join(", ") || "partner portal"})` : platform.ecommerce.value ?? "none detected"}`);
   lines.push(
-    `Store: ${store.hasStore ? `Yes — ${store.productCount} products, ${store.categoryCount} categories` : "No active store"}`
+    `Store: ${
+      store.isThirdParty
+        ? `Third-party integration (${store.thirdPartyIntegrations?.join(", ") || "external portal"})${store.notes ? ` — ${store.notes}` : ""}`
+        : store.hasStore
+        ? `Yes — ${store.productCount} products, ${store.categoryCount} categories`
+        : "No active store"
+    }`
   );
   lines.push("");
 

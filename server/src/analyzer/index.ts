@@ -5,6 +5,8 @@ import { detectProviders, type ProvidersResult } from "./providers.js";
 import { detectLocations, type LocationsResult } from "./locations.js";
 import { detectBeforeAfterGallery, type BeforeAfterResult } from "./beforeAfter.js";
 
+import { fetchHtml } from "./scrapeLite.js";
+
 export interface AnalyzeResult {
   url: string;
   platform: PlatformResult;
@@ -44,36 +46,25 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Pro
 export async function analyze(url: string): Promise<AnalyzeResult> {
   const crawl = await crawlSite(url);
 
-  const platformPromise = withTimeout(detectPlatform(crawl.origin), 15000, {
+  const platformPromise = withTimeout(detectPlatform(crawl.origin), 30000, {
     cms: { value: null, confidence: "unknown" as const, evidence: [] },
     builder: { value: null, confidence: "unknown" as const, evidence: [] },
     ecommerce: { value: null, confidence: "unknown" as const, evidence: [] },
   });
-  // Safety-net timeout only: classifyPages now internally time-boxes its own
-  // slow steps (Gemini adjudication, Crawlee content fetch) at 20s each, so
-  // this should rarely fire. It used to be the ONLY timeout, which meant a
-  // slow content-fetch step silently discarded the entire, already-computed
-  // taxonomy for all other pages — confirmed live on a 266-page Divi site.
-  const taxonomyPromise = withTimeout(classifyPages(crawl.pages), 55000, { byType: {}, uncertainCount: 0, warnings: [] });
-  const providersPromise = withTimeout(detectProviders(crawl.origin, crawl.pages), 30000, {
+  const taxonomyPromise = withTimeout(classifyPages(crawl.pages), 90000, { byType: {}, uncertainCount: 0, warnings: [] });
+  const providersPromise = withTimeout(detectProviders(crawl.origin, crawl.pages), 45000, {
     count: "unknown" as const,
     source: null,
     list: [],
   });
-  const locationsPromise = withTimeout(detectLocations(crawl.origin, crawl.pages, crawl.sitemaps), 20000, {
+  const locationsPromise = withTimeout(detectLocations(crawl.origin, crawl.pages, crawl.sitemaps), 45000, {
     count: "unknown" as const,
     source: null,
     list: [],
   });
 
-  // beforeAfterGallery depends on taxonomy.byType.beforeAfter, so it can't
-  // start until taxonomy resolves — but it does NOT depend on
-  // providers/locations, so it's kicked off as soon as taxonomy is ready
-  // rather than waiting for the whole batch first. Confirmed live this
-  // mattered: awaiting the full batch before starting it pushed a cold-start
-  // request past a 30s timeout that a concurrent start would have avoided.
   const taxonomy = await taxonomyPromise;
-  const beforeAfterPromise = withTimeout(detectBeforeAfterGallery(taxonomy.byType.beforeAfter?.urls || []), 35000, {
+  const beforeAfterPromise = withTimeout(detectBeforeAfterGallery(taxonomy.byType.beforeAfter?.urls || []), 60000, {
     pageUrl: null,
     imageCount: 0,
     caseCount: "unknown" as const,
@@ -82,14 +73,21 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
     images: [],
   });
 
-  const [platform, providers, locations, beforeAfterGallery] = await Promise.all([
+  // Check for shop page to detect any third-party skincare / product store integrations
+  const shopPage = crawl.pages.find((p) => /^\/(shop|store)\/?$/i.test(p.path)) ||
+    (crawl.pages.some((p) => /\/(shop|store)\//i.test(p.path)) ? { url: crawl.origin + "/shop/", path: "/shop/" } : null);
+
+  const shopHtmlPromise = shopPage ? fetchHtml(shopPage.url, 25000).catch(() => "") : Promise.resolve("");
+
+  const [platform, providers, locations, beforeAfterGallery, shopHtml] = await Promise.all([
     platformPromise,
     providersPromise,
     locationsPromise,
     beforeAfterPromise,
+    shopHtmlPromise,
   ]);
 
-  const store = detectStore(crawl.counts, platform.ecommerce);
+  const store = detectStore(crawl.counts, platform.ecommerce, shopHtml);
 
   // Surface taxonomy's own warnings (internal timeouts on its slow steps) and
   // the outer-safety-net "reason" (if THAT fired instead) alongside crawl's —

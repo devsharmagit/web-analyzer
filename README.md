@@ -2,7 +2,7 @@
 
 Given one website URL, return a structured profile of the site — platform, page
 counts by type, store size, providers and locations. Med-spa vertical.
-Full scope in [ANALYZER-SCOPE.md](ANALYZER-SCOPE.md); build plan in [TODO.md](TODO.md).
+Full architecture & analysis strategies in [ARCHITECTURE.md](ARCHITECTURE.md); scope in [ANALYZER-SCOPE.md](ANALYZER-SCOPE.md); build plan in [TODO.md](TODO.md).
 
 ## Structure
 

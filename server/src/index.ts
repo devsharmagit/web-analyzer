@@ -40,6 +40,8 @@ app.get("/api/analyze", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Analyzer API listening on http://localhost:${PORT}`);
 });
+server.timeout = 180000;
+server.keepAliveTimeout = 180000;

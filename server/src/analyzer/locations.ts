@@ -58,7 +58,7 @@ function fromKml(xml: string): Location[] {
 // (number + street-type word + city, state zip), not a bare phone number alone,
 // since a phone with no address is too weak to call "a location."
 const ADDRESS_RE =
-  /\d{1,6}\s+[A-Za-z0-9.'\s]{2,40}(?:Street|St|Avenue|Ave|Blvd|Boulevard|Road|Rd|Suite|Ste|Drive|Dr|Way|Lane|Ln|Highway|Hwy|Circle|Cir|Court|Ct|Parkway|Pkwy)[.,]?\s*[A-Za-z0-9#.,\s]{0,40},\s*[A-Za-z\s]+,?\s*[A-Z]{2}\s*\d{5}/i;
+  /\d{1,6}\s+[A-Za-z0-9.'\s]{2,40}(?:Street|St|Avenue|Ave|Blvd|Boulevard|Road|Rd|Suite|Ste|Drive|Dr|Way|Lane|Ln|Highway|Hwy|Circle|Cir|Court|Ct|Parkway|Pkwy)[.,]?\s*[A-Za-z0-9#.,\s]{0,50},\s*[A-Za-z\s]+,?\s*[A-Z]{2}(?:\s*\d{5})?/i;
 const PHONE_RE = /\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}/;
 
 function fromFooterHeuristic(html: string): Location[] {
@@ -67,6 +67,51 @@ function fromFooterHeuristic(html: string): Location[] {
   if (!addressMatch) return []; // no address shape found = too weak to report a location
   const phoneMatch = text.match(PHONE_RE);
   return [{ name: "", address: addressMatch[0].replace(/\s+/g, " ").trim(), phone: phoneMatch?.[0] || "" }];
+}
+
+function fromContactOrLocationHtml(html: string): Location[] {
+  let name = "";
+  let address = "";
+  let phone = "";
+
+  // 1. Google Maps embed: <iframe src="...maps.google.com/maps?q=..."> or iframe title
+  const mapEmbed = html.match(/maps\.google\.com\/maps\?[^"']*q=([^&"']+)/i);
+  const iframeTitle = html.match(/<iframe[^>]+title=["']([^"']+)["']/i)?.[1];
+  const mapQuery = mapEmbed ? decodeURIComponent(mapEmbed[1].replace(/\+/g, " ")) : "";
+
+  // 2. Google Maps link: <a href="https://maps.app.goo.gl/..." or maps.google.com>...</a>
+  const mapsLink = html.match(/<a[^>]+href=["']https?:\/\/(?:maps\.app\.goo\.gl|maps\.google\.com|www\.google\.com\/maps)[^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
+  const linkAddress = mapsLink ? mapsLink[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "";
+
+  // 3. Tel link or phone pattern
+  const telMatch = html.match(/href=["']tel:([0-9+\-(). ]+)["']/i);
+  const phoneMatch = html.match(PHONE_RE);
+  phone = telMatch ? telMatch[1].trim() : (phoneMatch ? phoneMatch[0].trim() : "");
+
+  if (linkAddress && ADDRESS_RE.test(linkAddress)) {
+    address = linkAddress;
+  }
+
+  if (mapQuery || iframeTitle) {
+    const rawMap = mapQuery || iframeTitle || "";
+    const match = rawMap.match(ADDRESS_RE);
+    if (match) {
+      if (!address) address = match[0].trim();
+      const extractedName = rawMap.replace(match[0], "").replace(/[, -]+$/, "").trim();
+      if (extractedName && !name) name = extractedName;
+    }
+  }
+
+  if (!address) {
+    const text = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ");
+    const match = text.match(ADDRESS_RE);
+    if (match) address = match[0].trim();
+  }
+
+  if (address || phone) {
+    return [{ name, address, phone }];
+  }
+  return [];
 }
 
 function normalizeAddress(addr: string): string {
@@ -113,7 +158,7 @@ function mergeComplementaryPartials(locations: Location[]): Location[] {
 /**
  * Find and extract location info: JSON-LD LocalBusiness on the homepage first,
  * then locations.kml (found via a `local`-sourced sitemap URL, if Phase 1 saw
- * one), then a /locations/ page.
+ * one), then /locations/ or /contact/ pages, then footer heuristics.
  */
 export async function detectLocations(
   origin: string,
@@ -136,11 +181,28 @@ export async function detectLocations(
     }
   }
 
-  const locationsPage = pages.find((p) => /^\/(locations?|our-locations)\/?$/i.test(p.path));
-  if (!found.length && locationsPage) {
-    const html = await fetchHtml(locationsPage.url);
-    found = fromJsonLd(extractJsonLd(html));
-    source = locationsPage.path;
+  // Check dedicated location or contact pages (from crawl or directly on origin)
+  const contactOrLocationPages = pages.filter((p) =>
+    /^\/(locations?|our-locations?|contact|contact-us|contact_us|contactus)\/?$/i.test(p.path)
+  );
+  if (!contactOrLocationPages.length) {
+    contactOrLocationPages.push({ url: origin + "/contact/", path: "/contact/", source: "page", sources: ["page"], isPage: true, title: "Contact" });
+    contactOrLocationPages.push({ url: origin + "/locations/", path: "/locations/", source: "page", sources: ["page"], isPage: true, title: "Locations" });
+  }
+
+  if (!found.length) {
+    for (const page of contactOrLocationPages) {
+      const html = await fetchHtml(page.url);
+      if (!html) continue;
+      found = fromJsonLd(extractJsonLd(html));
+      if (!found.length) {
+        found = fromContactOrLocationHtml(html);
+      }
+      if (found.length) {
+        source = page.path;
+        break;
+      }
+    }
   }
 
   // Last resort: an address-shaped string in the footer/homepage, no structured
@@ -153,12 +215,13 @@ export async function detectLocations(
     }
   }
 
-  // A dedicated /locations/ page existing but yielding no structured data still
+  // A dedicated /locations/ or /contact/ page existing but yielding no structured data still
   // tells us there's at least one location — count it as unknown detail rather
   // than zero.
   if (!found.length) {
-    if (locationsPage) return { count: "unknown", source: locationsPage.path, list: [], reason: "found a /locations/ page but no structured or footer address data on it" };
-    return { count: "unknown", source: null, list: [], reason: "no JSON-LD, locations.kml, /locations/ page, or footer address found" };
+    const existingTarget = contactOrLocationPages[0];
+    if (existingTarget) return { count: "unknown", source: existingTarget.path, list: [], reason: `found ${existingTarget.path} but no address or map coordinates could be identified` };
+    return { count: "unknown", source: null, list: [], reason: "no JSON-LD, locations.kml, contact/locations page, or footer address found" };
   }
 
   const deduped = mergeComplementaryPartials(dedupe(found));

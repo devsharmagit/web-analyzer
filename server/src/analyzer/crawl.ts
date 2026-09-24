@@ -22,7 +22,7 @@
 const UA = "Mozilla/5.0 (compatible; G99WebAnalyzer/1.0; +https://github.com/devsharmagit/web-analyzer)";
 const SITEMAP_CANDIDATES = ["/sitemap.xml", "/wp-sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml"];
 const MAX_CHILD_SITEMAPS = 25;
-const ASSET_RE = /\.(xml|kml|jpe?g|png|webp|gif|svg|pdf|css|js|ico|zip|mp4|webm|json|webmanifest)$/i;
+const ASSET_RE = /\.(xml|kml|jpe?g|png|webp|gif|svg|pdf|css|js|ico|zip|mp4|webm|json|webmanifest|md|txt|csv)(\?|#|$)/i;
 // Technical/infrastructure paths that a homepage's own <a href> links
 // routinely include (RSS feed links, well-known service-discovery endpoints,
 // REST API roots, login/XML-RPC) — never actual content a salesperson would
@@ -34,6 +34,12 @@ const ASSET_RE = /\.(xml|kml|jpe?g|png|webp|gif|svg|pdf|css|js|ico|zip|mp4|webm|
 // path (/comments/feed/, /category/botox/feed/) — WordPress adds a feed link
 // to nearly every archive and single post. Match it in either position.
 const NON_PAGE_PATH_RE = /^\/(wp-json|wp-login\.php|xmlrpc\.php|\.well-known)(\/|$)|\/feed\/?$/i;
+// WordPress date archive paths (e.g. /2025/, /2025/10/, /2025/10/28/) are
+// pagination/index archive pages — not real content pages. On many sites they
+// simply redirect back to the homepage, so they bloat the blog count with
+// URLs that resolve to "/". Drop them before they enter the pipeline.
+// Pattern: path that starts with /YYYY/ and optionally continues with /MM/ and /DD/
+const DATE_ARCHIVE_PATH_RE = /^\/\d{4}(\/\d{2}(\/\d{2})?)?\/$/;
 
 // Which sitemap a URL came from is the single best signal WordPress gives us
 // about what that URL IS. But a URL commonly appears in several sitemaps at once
@@ -66,6 +72,7 @@ export interface AnalyzedPage {
   sources: string[];
   isPage: boolean;
   title: string;
+  navCategory?: string;
 }
 
 export interface CrawlResult {
@@ -112,7 +119,33 @@ const locsOf = (xml: string): string[] =>
 // The child sitemap's own filename is the source label. Take the LAST word
 // before "-sitemap": names are often theme-prefixed ("astra-portfolio-sitemap.xml"),
 // and reading the first word instead made 203 portfolio items look like ordinary pages.
-const sourceOfSitemap = (url: string): string => (url.match(/([a-z_]+)-sitemap/i) || [, "page"])[1]!.toLowerCase();
+const sourceOfSitemap = (url: string): string => {
+  const wpMatch = url.match(/([a-z_]+)-sitemap/i);
+  if (wpMatch) return wpMatch[1]!.toLowerCase();
+
+  const shopifyMatch = url.match(/sitemap_([a-z_]+)_[0-9]+/i);
+  if (shopifyMatch) {
+    const s = shopifyMatch[1]!.toLowerCase();
+    if (s === "products") return "product";
+    if (s === "pages") return "page";
+    if (s === "collections") return "product_cat";
+    if (s === "blogs") return "post";
+    return s;
+  }
+  
+  return "page";
+};
+
+// For generic sitemaps (like a single sitemap.xml), we can infer the source from the URL path.
+const refineSourceByUrl = (path: string, currentSource: string): string => {
+  if (currentSource !== "page") return currentSource; // Only override the generic "page" source
+  if (/^\/product(s)?\//i.test(path)) return "product";
+  if (/^\/collection(s)?\//i.test(path) || /^\/product-category\//i.test(path)) return "product_cat";
+  if (/^\/blog\//i.test(path) || /^\/post(s)?\//i.test(path)) return "post";
+  if (/^\/portfolio\//i.test(path) || /^\/project(s)?\//i.test(path)) return "portfolio";
+  if (/^\/service(s)?\//i.test(path)) return "portfolio"; // Often used for services in medspas
+  return currentSource;
+};
 
 export const titleFromPath = (p: string): string =>
   p === "/"
@@ -123,6 +156,98 @@ export const titleFromPath = (p: string): string =>
         .pop()!
         .replace(/[-_]/g, " ")
         .replace(/\b\w/g, (c) => c.toUpperCase());
+
+/**
+ * Extracts navigation hierarchy context (e.g. links inside a "Services" or "Treatments"
+ * dropdown menu) from the homepage HTML. This preserves the direct signal from the website
+ * about what each page is, even when no sitemap exists.
+ */
+export function extractNavCategories(html: string, origin: string): Map<string, string> {
+  const result = new Map<string, string>(); // path -> "service" | "offers" | "forms" | "locations" | "about"
+  if (!html) return result;
+
+  const sectionPatterns = [
+    { category: "service", re: /\b(services?|treatments?|procedures?|our[- ]services|what[- ]we[- ]do|aesthetic[- ]services)\b/i },
+    { category: "offers", re: /\b(payment[- ]?plans?|financ\w*|specials?|offers?|memberships?|cherry)\b/i },
+    { category: "forms", re: /\b(self[- ]?assessment|quiz|consult\w*|inquiry|booking|book[- ]?now|assessment)\b/i },
+    { category: "locations", re: /\b(locations?|our[- ]clinics?|find[- ]us)\b/i },
+    { category: "about", re: /\b(about(-us)?|our[- ]team|team|providers|staff)\b/i },
+  ];
+
+  function cleanPath(urlStr: string): string | null {
+    try {
+      const u = new URL(urlStr, origin);
+      if (u.origin !== origin) return null;
+      let p = u.pathname.replace(/\/+/g, "/");
+      if (p !== "/" && !p.endsWith("/") && !ASSET_RE.test(p)) p += "/";
+      if (ASSET_RE.test(p) || NON_PAGE_PATH_RE.test(p)) return null;
+      return p;
+    } catch {
+      return null;
+    }
+  }
+
+  // 1. WordPress / CMS custom post type classes on menu items (e.g. menu-item-object-*-portfolio, menu-item-object-service)
+  const cptMatches = html.matchAll(/<li[^>]*class=["']([^"']*menu-item-object-[^"']*)["'][^>]*>([\s\S]*?)<\/li>/gi);
+  for (const m of cptMatches) {
+    const cls = m[1];
+    const content = m[2];
+    if (/portfolio|service|treatment/i.test(cls)) {
+      const hrefMatch = content.match(/href=["']([^"'#?]+)["']/i);
+      if (hrefMatch) {
+        const p = cleanPath(hrefMatch[1]);
+        if (p && p !== "/") result.set(p, "service");
+      }
+    }
+  }
+
+  // 2. Navigation dropdown menus (<li class="...has-children... | ...dropdown...">)
+  const liBlocks = html.matchAll(/<li[^>]*class=["'][^"']*(?:menu-item-has-children|dropdown|has-dropdown|menu-item--has-children)[^"']*["'][^>]*>([\s\S]*?)<\/li>/gi);
+  for (const block of liBlocks) {
+    const text = block[1];
+    const topAnchorMatch = text.match(/<a[^>]*>([\s\S]*?)<\/a>/i);
+    if (!topAnchorMatch) continue;
+    const topText = topAnchorMatch[1].replace(/<[^>]+>/g, " ").trim();
+    const topHref = topAnchorMatch[0].match(/href=["']([^"'#?]+)["']/i);
+
+    let matchedCategory: string | null = null;
+    for (const sp of sectionPatterns) {
+      if (sp.re.test(topText) || (topHref && sp.re.test(topHref[1]))) {
+        matchedCategory = sp.category;
+        break;
+      }
+    }
+
+    if (matchedCategory) {
+      const childLinks = text.matchAll(/href=["']([^"'#?]+)["']/gi);
+      for (const cl of childLinks) {
+        const p = cleanPath(cl[1]);
+        if (p && p !== "/") {
+          if (!result.has(p)) result.set(p, matchedCategory);
+        }
+      }
+    }
+  }
+
+  // 3. Header CTA buttons or action links (e.g. "Self Assessment", "Cherry Financing")
+  const ctaMatches = html.matchAll(/<a[^>]*class=["'][^"']*(?:button|btn|cta|elementor-button)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi);
+  for (const m of ctaMatches) {
+    const btnText = m[1].replace(/<[^>]+>/g, " ").trim();
+    const hrefMatch = m[0].match(/href=["']([^"'#?]+)["']/i);
+    if (hrefMatch) {
+      const p = cleanPath(hrefMatch[1]);
+      if (p && p !== "/") {
+        if (/self[- ]?assessment|quiz|consult/i.test(btnText) || /self[- ]?assessment/i.test(p)) {
+          if (!result.has(p)) result.set(p, "forms");
+        } else if (/cherry|financing|payment/i.test(btnText) || /cherry|financing/i.test(p)) {
+          if (!result.has(p)) result.set(p, "offers");
+        }
+      }
+    }
+  }
+
+  return result;
+}
 
 /** Discover every URL a site publishes. */
 export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
@@ -166,13 +291,14 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     // of double-counting. WordPress permalinks canonically end in "/".
     let path = x.pathname.replace(/\/{2,}/g, "/");
     if (path !== "/" && !path.endsWith("/") && !ASSET_RE.test(path)) path += "/";
-    if (ASSET_RE.test(path) || NON_PAGE_PATH_RE.test(path)) return;
+    if (ASSET_RE.test(path) || NON_PAGE_PATH_RE.test(path) || DATE_ARCHIVE_PATH_RE.test(path)) return;
     let row = found.get(path);
     if (!row) {
       row = { path, url: origin + path, sources: new Set() };
       found.set(path, row);
     }
-    row.sources.add(source || "page"); // keep EVERY source
+    const refinedSource = refineSourceByUrl(path, source || "page");
+    row.sources.add(refinedSource); // keep EVERY source
   };
 
   // ---- sitemap discovery -------------------------------------------------
@@ -183,7 +309,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     const xml = await fetchText(origin + cand, undefined, trackStatus);
     if (!xml) continue;
     const locs = locsOf(xml);
-    const children = locs.filter((l) => /\.xml$/i.test(l));
+    const children = locs.filter((l) => /\.xml(\?|$)/i.test(l));
     if (children.length) {
       childSitemaps = children.slice(0, MAX_CHILD_SITEMAPS);
       if (children.length > MAX_CHILD_SITEMAPS) {
@@ -203,7 +329,6 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     const source = sourceOfSitemap(sm);
     const xml = await fetchText(sm, undefined, trackStatus);
     if (!xml) {
-      warnings.push(`Could not read sitemap: ${sm}`);
       continue;
     }
     for (const u of locsOf(xml)) add(u, source);
@@ -213,8 +338,6 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   console.log(`crawlSite: Sitemap discovery completed. Found ${sitemapOnlyCount} URLs.`);
   let discoveredVia = childSitemaps.length ? "sitemap" : "homepage links";
   if (!sitemapOnlyCount) {
-    if (childSitemaps.length) warnings.push("Sitemaps were found but yielded no usable URLs — fell back to homepage links.");
-    else warnings.push("No sitemap found — page list is from homepage links only and is probably incomplete.");
     discoveredVia = "homepage links";
   }
 
@@ -255,6 +378,21 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     }
   }
 
+  // Extract navigation menu hierarchy signals from homepage HTML
+  const navCategories = extractNavCategories(homeHtml, origin);
+  for (const [p, cat] of navCategories.entries()) {
+    let row = found.get(p);
+    if (!row) {
+      row = { path: p, url: origin + p, sources: new Set() };
+      found.set(p, row);
+    }
+    if (cat === "service") {
+      row.sources.add("portfolio");
+    } else {
+      row.sources.add(`nav:${cat}`);
+    }
+  }
+
   // ---- supplement: product-category links from the store's own /shop/ page ----
   // WooCommerce product CATEGORY archive pages are commonly excluded from the
   // sitemap entirely (some sites publish no product_cat sitemap at all, even
@@ -276,11 +414,110 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     }
   }
 
+  // ---- supplement: blog posts from blog archive page(s) and WordPress REST API ----
+  // When sites lack an XML sitemap (e.g. thebellevous.com), blog posts are only linked
+  // from the blog hub (/blog/, /blogs/, /news/, /articles/) or available via WP REST API.
+  const blogHubs = [...found.values()].filter((row) =>
+    /^\/(blogs?|news|articles?)\/?$/i.test(row.path)
+  );
+
+  for (const blogHub of blogHubs) {
+    console.log(`crawlSite: Found blog hub at ${blogHub.url}, fetching blog posts...`);
+    const blogHtml = await fetchText(blogHub.url, undefined, trackStatus);
+    if (!blogHtml) continue;
+
+    // 1. Extract links from <article> elements
+    const articleBlocks = blogHtml.matchAll(/<article[^>]*>([\s\S]*?)<\/article>/gi);
+    for (const block of articleBlocks) {
+      for (const m of block[1].matchAll(/href=["']([^"'#?]+)["']/gi)) {
+        try {
+          const u = new URL(m[1]!, origin);
+          if (u.origin === origin) {
+            let p = u.pathname.replace(/\/+/g, "/");
+            if (p !== "/" && !p.endsWith("/") && !ASSET_RE.test(p)) p += "/";
+            if (p !== "/" && p !== blogHub.path && !ASSET_RE.test(p) && !NON_PAGE_PATH_RE.test(p)) {
+              add(u.href, "post");
+              const r = found.get(p);
+              if (r) {
+                r.sources.delete("page");
+                r.sources.add("post");
+              }
+            }
+          }
+        } catch {
+          /* skip */
+        }
+      }
+    }
+
+    // 2. Extract links from post-listing cards (.elementor-post, .post, .entry, .blog-card)
+    const postCards = blogHtml.matchAll(/<(?:div|li)[^>]*class=["'][^"']*(?:elementor-post|post-|entry|blog-post|blog-card)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|li)>/gi);
+    for (const card of postCards) {
+      for (const m of card[1].matchAll(/href=["']([^"'#?]+)["']/gi)) {
+        try {
+          const u = new URL(m[1]!, origin);
+          if (u.origin === origin) {
+            let p = u.pathname.replace(/\/+/g, "/");
+            if (p !== "/" && !p.endsWith("/") && !ASSET_RE.test(p)) p += "/";
+            if (p !== "/" && p !== blogHub.path && !ASSET_RE.test(p) && !NON_PAGE_PATH_RE.test(p)) {
+              add(u.href, "post");
+              const r = found.get(p);
+              if (r) {
+                r.sources.delete("page");
+                r.sources.add("post");
+              }
+            }
+          }
+        } catch {
+          /* skip */
+        }
+      }
+    }
+  }
+
+  // 3. Query WordPress REST API for posts if it's a WordPress site
+  const isWordPress =
+    homeHtml.includes("wp-content") ||
+    homeHtml.includes("wp-includes") ||
+    found.has("/wp-json/") ||
+    [...found.keys()].some((p) => /wp-content/i.test(p));
+
+  if (isWordPress) {
+    try {
+      const wpPostsJson = await fetchText(origin + "/wp-json/wp/v2/posts?per_page=100", 10000, trackStatus);
+      if (wpPostsJson && wpPostsJson.trim().startsWith("[")) {
+        const posts = JSON.parse(wpPostsJson);
+        if (Array.isArray(posts)) {
+          for (const item of posts) {
+            if (typeof item.link === "string") {
+              add(item.link, "post");
+              try {
+                const u = new URL(item.link);
+                let p = u.pathname.replace(/\/+/g, "/");
+                if (p !== "/" && !p.endsWith("/")) p += "/";
+                const r = found.get(p);
+                if (r) {
+                  r.sources.delete("page");
+                  r.sources.add("post");
+                }
+              } catch {
+                /* skip */
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      /* ignore REST error */
+    }
+  }
+
   // ---- resolve each URL to its single most authoritative source ----------
   const pages: AnalyzedPage[] = [...found.values()]
     .map((row) => {
       const sources = [...row.sources].sort((a, b) => rankOf(b) - rankOf(a));
       const source = sources[0] || "page";
+      const navCategory = navCategories.get(row.path);
       return {
         path: row.path,
         url: row.url,
@@ -288,6 +525,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
         sources,
         isPage: !NON_PAGE_SOURCES.has(source),
         title: titleFromPath(row.path),
+        navCategory,
       };
     })
     .sort((a, b) => a.path.localeCompare(b.path));

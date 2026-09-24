@@ -1,18 +1,16 @@
 import { useEffect, useState } from "react";
 import { analyze, type AnalyzeResult, type Detection } from "./api";
-import { oneLineSummary, toClipboardText } from "./summarize";
+import { oneLineSummary } from "./summarize";
 import { generateReportHtml } from "./report";
+import html2pdf from "html2pdf.js";
 import { motion, AnimatePresence } from "motion/react";
 import {
   MagnifyingGlass,
   WarningCircle,
-  Copy,
-  CheckCircle,
   Globe,
   Storefront,
   Users,
   MapPin,
-  Clock,
   Files,
   Sun,
   Moon,
@@ -75,7 +73,7 @@ function ThemeToggle() {
 }
 
 export default function App() {
-  const [url, setUrl] = useState("https://ruma.com");
+  const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResult | null>(null);
@@ -331,22 +329,21 @@ function TabOverview({ result }: { result: AnalyzeResult }) {
       <div className="md:col-span-12 lg:col-span-4 space-y-8">
         <section>
           <SectionHeading>Crawl Stats</SectionHeading>
-          <div className="mt-4 grid grid-cols-2 gap-4">
+          <div className="mt-4 grid grid-cols-1 gap-4">
             <Tile icon={<Files weight="duotone" />} label="Pages" value={result.pages.total} />
-            <Tile icon={<Globe weight="duotone" />} label="URLs seen" value={crawl.urlsSeen} />
-            <Tile icon={<MapPin weight="duotone" />} label="Sitemaps" value={crawl.sitemaps.length} />
-            <Tile icon={<Clock weight="duotone" />} label="Time" value={`${(crawl.durationMs / 1000).toFixed(1)}s`} />
           </div>
         </section>
 
-        {crawl.warnings.length > 0 && (
+        {crawl.warnings.filter((w) => !/sitemap/i.test(w)).length > 0 && (
           <section>
             <SectionHeading>Warnings</SectionHeading>
             <div className="mt-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5">
               <ul className="list-inside list-disc space-y-2 text-sm text-[var(--color-text)]">
-                {crawl.warnings.map((w, i) => (
-                  <li key={i}>{w}</li>
-                ))}
+                {crawl.warnings
+                  .filter((w) => !/sitemap/i.test(w))
+                  .map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
               </ul>
             </div>
           </section>
@@ -368,18 +365,27 @@ function TabOverview({ result }: { result: AnalyzeResult }) {
           <SectionHeading>E-Commerce</SectionHeading>
           <div className="mt-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6 md:p-8 shadow-sm flex flex-col md:flex-row gap-8 items-start">
             <div className="flex-1 w-full">
-              <Badge label="Platform" d={platform.ecommerce} />
+              <Badge
+                label="Platform"
+                d={
+                  store.isThirdParty && !platform.ecommerce.value
+                    ? { value: store.platform || "Third-party Integration", confidence: "high", evidence: [store.notes || "Third-party store integration"] }
+                    : platform.ecommerce
+                }
+              />
             </div>
             <div className="flex-1">
               <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-muted)] mb-2">
                 <Storefront weight="duotone" className="h-5 w-5" /> Store Status
               </div>
               <p className="text-sm leading-relaxed text-[var(--color-text)]">
-                {store.hasStore
-                  ? `Active store detected (${store.platform ?? "unknown platform"}). Found ${store.productCount} products across ${store.categoryCount} categories.`
-                  : store.platform
-                    ? `${store.platform} is installed, but no products were found. Not an active store.`
-                    : "No store detected on this site."}
+                {store.isThirdParty
+                  ? `Third-party store integration detected (${store.thirdPartyIntegrations?.join(", ") || "Partner Portal"}). Products found on /shop are fulfilled via external partner portals rather than a native self-hosted cart.`
+                  : store.hasStore
+                    ? `Active store detected (${store.platform ?? "unknown platform"}). Found ${store.productCount} products across ${store.categoryCount} categories.`
+                    : store.platform
+                      ? `${store.platform} is installed, but no products were found. Not an active store.`
+                      : "No store detected on this site."}
               </p>
             </div>
           </div>
@@ -524,69 +530,70 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   );
 }
 
-function copyText(text: string): boolean {
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  let ok = false;
-  try {
-    ok = document.execCommand("copy");
-  } catch {
-    ok = false;
-  }
-  document.body.removeChild(textarea);
-  return ok;
-}
-
 function SummaryBanner({ result }: { result: AnalyzeResult }) {
-  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
-
-  async function onCopy() {
-    const text = toClipboardText(result);
-    let ok = false;
-    try {
-      await navigator.clipboard.writeText(text);
-      ok = true;
-    } catch {
-      ok = copyText(text); // fallback path
-    }
-    setStatus(ok ? "copied" : "failed");
-    setTimeout(() => setStatus("idle"), 2500);
-  }
-
   const [downloading, setDownloading] = useState(false);
 
-  function onDownload() {
+  async function onDownload() {
     if (downloading) return;
     setDownloading(true);
+    let container: HTMLElement | null = null;
     try {
-      // Generate a complete standalone HTML document
-      const html = generateReportHtml(result, { standalone: true });
+      const host = result.url.replace(/^https?:\/\//i, "").replace(/[^a-z0-9.-]/gi, "-");
+      const date = new Date().toISOString().slice(0, 10);
+      const filename = `website-analysis-${host}-${date}.pdf`;
 
-      // Create a Blob URL and open it in a new tab
-      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-      const blobUrl = URL.createObjectURL(blob);
-      const win = window.open(blobUrl, "_blank");
+      // Generate report HTML content
+      const html = generateReportHtml(result, { standalone: false });
 
-      // Clean up the blob URL after a delay (the new window has its own reference)
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+      // html2canvas REQUIRES the element to be in normal document flow
+      // (position:relative) to render it — any off-screen trick like
+      // position:fixed or position:absolute;left:-9999px produces a blank
+      // canvas. The element is briefly appended and removed after capture.
+      //
+      // Width is set to 700px (A4 usable: 210mm - 2×12mm = 186mm ≈ 703px)
+      // and the same value is passed to html2canvas via `windowWidth` so the
+      // snapshot is locked to that width and the right side is never clipped.
+      container = document.createElement("div");
+      container.id = "pdf-report-export-container";
+      container.style.position = "relative";
+      container.style.width = "700px";
+      container.style.margin = "0 auto";
+      container.style.background = "#ffffff";
+      container.style.color = "#1e293b";
+      container.innerHTML = html;
 
-      if (!win) {
-        // Popup was blocked — fall back to a direct download of the HTML file
-        const a = document.createElement("a");
-        a.href = blobUrl;
-        const host = result.url.replace(/^https?:\/\//i, "").replace(/[^a-z0-9.-]/gi, "-");
-        const date = new Date().toISOString().slice(0, 10);
-        a.download = `website-analysis-${host}-${date}.html`;
-        a.click();
-      }
+      document.body.appendChild(container);
+
+      const opt = {
+        margin: [12, 12, 12, 12] as [number, number, number, number],
+        filename,
+        image: { type: "jpeg" as const, quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          letterRendering: true,
+          // windowWidth locks html2canvas to the container width so no
+          // browser viewport bleed widens the canvas beyond the PDF page.
+          windowWidth: 700,
+        },
+        jsPDF: {
+          unit: "mm",
+          format: "a4",
+          orientation: "portrait" as const,
+        },
+        pagebreak: { mode: ["avoid-all", "css", "legacy"] },
+      };
+
+      // Download the PDF
+      await html2pdf().set(opt).from(container).save();
     } catch (err) {
-      console.error("Report generation error:", err);
+      console.error("PDF generation error:", err);
     } finally {
+      // Remove the component
+      if (container && container.parentNode) {
+        container.parentNode.removeChild(container);
+      }
       setDownloading(false);
     }
   }
@@ -598,7 +605,7 @@ function SummaryBanner({ result }: { result: AnalyzeResult }) {
         <p className="text-base font-medium leading-relaxed text-[var(--color-text)] flex-1">
           {oneLineSummary(result)}
         </p>
-        <div className="flex flex-shrink-0 gap-2.5">
+        <div className="flex flex-shrink-0">
           <button
             type="button"
             onClick={onDownload}
@@ -613,23 +620,6 @@ function SummaryBanner({ result }: { result: AnalyzeResult }) {
             ) : (
               <>
                 <DownloadSimple weight="bold" className="h-4 w-4" /> Download PDF Report
-              </>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={onCopy}
-            className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] px-5 py-2.5 text-sm font-medium text-[var(--color-text)] shadow-sm transition hover:bg-[var(--color-border)]/50 active:scale-95"
-          >
-            {status === "copied" ? (
-              <>
-                <CheckCircle weight="fill" className="text-emerald-500 h-4 w-4" /> Copied
-              </>
-            ) : status === "failed" ? (
-              "Couldn't copy"
-            ) : (
-              <>
-                <Copy weight="bold" className="h-4 w-4" /> Copy summary
               </>
             )}
           </button>

@@ -40,12 +40,8 @@ export interface ContentSignals {
   title: string;
   h1: string;
   metaDescription: string;
-  // Product-page signals: JSON-LD Product type, og:type=product, or a
-  // WooCommerce add-to-cart button — any one of these means "this is a
-  // product/store page" regardless of what its URL slug looks like (the
-  // "/alastin/" case: a branded skincare-line product page with no "shop"
-  // or "product" string anywhere in its path).
   looksLikeProduct: boolean;
+  looksLikeService?: boolean;
   fetchFailed: boolean;
 }
 
@@ -54,6 +50,7 @@ const EMPTY_SIGNALS: Omit<ContentSignals, "fetchFailed"> = {
   h1: "",
   metaDescription: "",
   looksLikeProduct: false,
+  looksLikeService: false,
 };
 
 /** Fetch content signals for a bounded list of URLs, concurrently, with retries. */
@@ -70,24 +67,29 @@ export async function fetchContentSignals(
     maxRequestRetries: 1,
     async requestHandler({ request, $, body }) {
       const html = String(body);
-      // Deliberately NOT using a bare `"@type":"Product"` JSON-LD check or a
-      // generic "add-to-cart"+"woocommerce" text match — both looked reliable
-      // in isolation but produced a confirmed false positive live: some SEO
-      // plugins stamp a `Product` JSON-LD block on every page (describing the
-      // business itself, for star-rating rich snippets), and "add to cart"
-      // text appears in a header mini-cart widget site-wide. The signals below
-      // were verified against a real product page (gloderma.com/alastin/,
-      // true) and the false-positive case (ruma.com's before/after gallery
-      // page, false) before being adopted.
       const looksLikeProduct =
         /property=["']og:type["']\s+content=["']product["']/i.test(html) ||
         /woocommerce-Price-amount/i.test(html) ||
-        /name=["']add-to-cart["']/i.test(html);
+        /name=["']add-to-cart["']/i.test(html) ||
+        /class=["'][^"']*sqs-add-to-cart-button[^"']*["']/i.test(html) || // Squarespace
+        /name=["']add["'][^>]*>.*add to cart/i.test(html) || // Shopify
+        /class=["'][^"']*ProductActionButtons[^"']*["']/i.test(html) || // Wix
+        /class=["'][^"']*shopify-payment-button[^"']*["']/i.test(html); // Shopify
+
+      const title = $("title").first().text().trim();
+      const h1 = $("h1").first().text().trim();
+      const metaDescription = $('meta[name="description"]').attr("content")?.trim() || "";
+      const textSample = `${title} ${h1} ${metaDescription}`;
+      const looksLikeService =
+        !looksLikeProduct &&
+        /(botox|dysport|filler|biostimulat|laser|peel|facial|treatment|procedure|inject|microneedl|contour|tightening|skincare|resurfac|rejuvenat|body-treatment)/i.test(textSample);
+
       results.set(request.url, {
-        title: $("title").first().text().trim(),
-        h1: $("h1").first().text().trim(),
-        metaDescription: $('meta[name="description"]').attr("content")?.trim() || "",
+        title,
+        h1,
+        metaDescription,
         looksLikeProduct,
+        looksLikeService,
         fetchFailed: false,
       });
     },
@@ -118,7 +120,7 @@ export interface ImageCandidate {
 const CHROME_ANCESTOR_SELECTOR = "header, nav, footer";
 // Filename/class patterns for chrome that CAN slip outside header/nav/footer
 // (e.g. a mobile off-canvas menu duplicate, a floating widget).
-const CHROME_NAME_RE = /logo|icon|avatar|sprite|placeholder|spinner|loader/i;
+const CHROME_NAME_RE = /logo|icon|avatar|sprite|placeholder|spinner|loader|cta|banner|promo/i;
 
 /** Fetch every real content `<img>` on a bounded list of pages, for case-counting a gallery. */
 export async function fetchImageCandidates(

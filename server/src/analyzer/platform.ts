@@ -23,9 +23,12 @@ export interface StoreResult {
   platform: string | null;
   productCount: number;
   categoryCount: number;
+  isThirdParty?: boolean;
+  thirdPartyIntegrations?: string[];
+  notes?: string;
 }
 
-async function fetchText(url: string, timeoutMs = 10000): Promise<string> {
+async function fetchText(url: string, timeoutMs = 25000): Promise<string> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
@@ -58,6 +61,7 @@ const CMS_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
   { name: "Squarespace", re: /squarespace\.com|static1\.squarespace/i },
   { name: "Wix", re: /wix\.com|wixstatic\.com/i },
   { name: "Webflow", re: /webflow\.com|website-files\.com/i },
+  { name: "Next.js", re: /_next\/static|_next\/data|next-head-count/i },
   { name: "Duda", re: /irp\.cdn-website\.com|dudamobile/i },
   { name: "GoDaddy", re: /godaddy\.com\/websites|gdwebsite/i },
 ];
@@ -68,6 +72,7 @@ const BUILDER_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
   { name: "Beaver Builder", re: /fl-builder/i },
   { name: "WPBakery", re: /wpb_wrapper|js_composer/i },
   { name: "Gutenberg", re: /wp-block-/i },
+  { name: "Webflow", re: /w-page|w-nav|w-embed/i },
 ];
 
 const ECOMMERCE_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
@@ -75,6 +80,8 @@ const ECOMMERCE_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
   { name: "Shopify", re: /cdn\.shopify\.com|Shopify\.theme/i },
   { name: "BigCommerce", re: /bigcommerce\.com/i },
   { name: "Ecwid", re: /ecwid\.com|xproductbrowser/i },
+  { name: "Wix Stores", re: /wix-stores|wixstores/i },
+  { name: "Squarespace Commerce", re: /sqs-cart|sqs-add-to-cart/i },
 ];
 
 // Sites commonly carry markers for more than one builder at once (an Elementor
@@ -109,8 +116,20 @@ export async function detectPlatform(origin: string): Promise<PlatformResult> {
   const genMatch = html.match(/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']+)["']/i);
   if (genMatch) {
     const gen = genMatch[1]!;
-    if (!cms.value && /wordpress/i.test(gen)) {
+    if (/wordpress/i.test(gen)) {
       cms.value = "WordPress";
+      cms.confidence = "high";
+      cms.evidence.push(`<meta name="generator"> = "${gen}"`);
+    } else if (/wix/i.test(gen)) {
+      cms.value = "Wix";
+      cms.confidence = "high";
+      cms.evidence.push(`<meta name="generator"> = "${gen}"`);
+    } else if (/squarespace/i.test(gen)) {
+      cms.value = "Squarespace";
+      cms.confidence = "high";
+      cms.evidence.push(`<meta name="generator"> = "${gen}"`);
+    } else if (/webflow/i.test(gen)) {
+      cms.value = "Webflow";
       cms.confidence = "high";
       cms.evidence.push(`<meta name="generator"> = "${gen}"`);
     } else if (cms.value && new RegExp(cms.value, "i").test(gen)) {
@@ -159,14 +178,61 @@ export async function detectPlatform(origin: string): Promise<PlatformResult> {
  * `platform` still reports which e-commerce plugin was detected even when
  * hasStore is false — that's a separate, still-useful fact.
  */
-export function detectStore(counts: Record<string, number>, ecommerce: Detection): StoreResult {
+const THIRD_PARTY_STORE_PATTERNS = [
+  { name: "SkinBetter Science", pattern: /skinbetter\.(?:pro|com)/i },
+  { name: "Colorescience", pattern: /colorescience\.com/i },
+  { name: "Alastin Skincare", pattern: /alastin\.com/i },
+  { name: "Revision Skincare", pattern: /revisionskincare\.com/i },
+  { name: "ZO Skin Health", pattern: /zoskinhealth\.com/i },
+  { name: "SkinMedica", pattern: /skinmedica\.com|brilliantconnections\.com/i },
+  { name: "DefenAge", pattern: /defenage\.com/i },
+  { name: "Epionce", pattern: /epionce\.com/i },
+  { name: "HydraFacial", pattern: /hydrafacial\.com/i },
+  { name: "Cherry Financing", pattern: /withcherry\.com/i },
+  { name: "RepeatMD", pattern: /repeatmd\.com/i },
+  { name: "MyAestheticRecord", pattern: /myaestheticrecord\.com/i },
+];
+
+export function detectThirdPartyStore(html: string): string[] {
+  if (!html) return [];
+  const found: string[] = [];
+  for (const item of THIRD_PARTY_STORE_PATTERNS) {
+    if (item.pattern.test(html)) {
+      found.push(item.name);
+    }
+  }
+  return found;
+}
+
+export function detectStore(
+  counts: Record<string, number>,
+  ecommerce: Detection,
+  shopHtml?: string
+): StoreResult {
   const productCount = counts.product || 0;
   const categoryCount = counts.product_cat || 0;
-  const hasStore = productCount > 0 || categoryCount > 0;
+  const hasNativeStore = productCount > 0 || categoryCount > 0;
+
+  const thirdPartyIntegrations = shopHtml ? detectThirdPartyStore(shopHtml) : [];
+  const isThirdParty = !hasNativeStore && thirdPartyIntegrations.length > 0;
+
+  let platform = ecommerce.value;
+  if (isThirdParty && !platform) {
+    platform = "Third-party Integration";
+  }
+
+  let notes: string | undefined;
+  if (isThirdParty) {
+    notes = `Products on /shop are fulfilled via third-party partner portals (${thirdPartyIntegrations.join(", ")}). Not a native self-hosted e-commerce store.`;
+  }
+
   return {
-    hasStore,
-    platform: ecommerce.value,
+    hasStore: hasNativeStore || isThirdParty,
+    platform,
     productCount,
     categoryCount,
+    isThirdParty,
+    thirdPartyIntegrations: thirdPartyIntegrations.length ? thirdPartyIntegrations : undefined,
+    notes,
   };
 }

@@ -46,9 +46,9 @@ const SECTIONS: Section[] = [
   // Forms and care sheets are tested BEFORE services: a "hormone health quiz" is
   // a lead form, not a service page, and must not be counted as one to rebuild.
   { key: "forms", label: "Forms & quizzes", scope: "optional",
-    test: (p) => /(quiz|form|inquiry|consult|appointment|booking|book-)/.test(p) },
+    test: (p) => /(quiz|form|inquiry|consult|appointment|booking|book-|assessment|self-assessment|treatment-finder)/i.test(p) },
   { key: "care", label: "Pre / post care", scope: "optional",
-    test: (p) => /(pre-and-post|pre-post|aftercare|post-care|instruction)/.test(p) },
+    test: (p) => /(pre-and-post|pre-post|aftercare|post-care|instruction)/i.test(p) },
   // Before/after split out of the old "proof" bucket — a gallery of results
   // photos is a distinct, countable page type (Q5), not folded into reviews.
   // Bare "gallery" / "results" are included (not just the compound phrases)
@@ -57,38 +57,38 @@ const SECTIONS: Section[] = [
   // confirmed against real sites (conqraesthetics /gallery/, drippynursejess
   // /results/ were both misrouted to "proof" before this widened match).
   { key: "beforeAfter", label: "Before & after", scope: "recommended",
-    test: (p) => /(before-and-after|before-after|b-a-gallery|results-gallery|\bgallery\b|\bresults\b|\bphotos?\b)/.test(p) },
+    test: (p) => /(before-and-after|before-after|b-a-gallery|results-gallery|\bgallery\b|\bresults\b|\bphotos?\b)/i.test(p) },
   // Condition vocabulary: what the patient HAS, not what the clinic DOES.
   // Checked before "service" below so condition words win when a URL is
   // otherwise ambiguous, but see the location-suffix guard in classifyPage —
   // "morpheus8-face-body-scar-near-draper-ut" must stay a service page.
   { key: "condition", label: "Condition pages", scope: "recommended",
     test: (p) =>
-      /^\/conditions?\//.test(p) ||
-      /(melasma|rosacea|acne-scar|hyperpigmentation|hair-loss|sun-damage|volume-loss|hyperhidrosis|cellulite|stretch-marks|dark-spots|fine-lines|wrinkles|double-chin|sagging-skin|uneven-skin-tone|enlarged-pores)/.test(p) },
+      /^\/conditions?\//i.test(p) ||
+      /(melasma|rosacea|acne-scar|hyperpigmentation|hair-loss|sun-damage|volume-loss|hyperhidrosis|cellulite|stretch-marks|dark-spots|fine-lines|wrinkles|double-chin|sagging-skin|uneven-skin-tone|enlarged-pores)/i.test(p) },
   { key: "service", label: "Treatment / service pages", scope: "required",
-    test: (p) => /(botox|dysport|filler|sculptra|microneedl|laser|peel|facial|inject|infusion|iv-|hormone|hrt|weight-loss|prp|prf|thread|skincare|hydrafacial|coolsculpt|kybella|bbl|moxi|morpheus|miradry|thermoclear|red-light|tox|lash|brow|wax|hair-removal|skin-tightening|body-contour)/.test(p) },
+    test: (p) => /(botox|dysport|filler|sculptra|biostimulat|radiesse|dermal-filler|neurotox|jeuveau|xeomin|daxxify|microneedl|skinpen|vivace|potenza|secret-rf|pixel8|opus|morpheus|laser|ipl|photofacial|photo-facial|bbl|moxi|halo|co2|resurfac|rejuvenat|tribella|venus[- ]?(versa|viva|bliss|legacy|freeze)?|versa-pro|peel|chemical-peel|facial|glowtox|hydrafacial|diamondglow|dermaplan|microderm|inject|infusion|iv-|hormone|hrt|weight-loss|semaglutide|tirzepatide|prp|prf|plasma|thread|skincare|coolsculpt|kybella|miradry|thermoclear|red-light|tox|lash|brow|wax|hair-removal|skin-tightening|body-contour|cellulite|contour|body-treatment|treatment(s)?-in-)/i.test(p) },
   // Offers is tested BEFORE proof: "affiliate-partner-discounts" is a discount
   // program, not a trust/affiliation page, but proof's bare "partner" keyword
   // used to win first — confirmed live on ruma.com.
   { key: "offers", label: "Offers, memberships & financing", scope: "recommended",
-    test: (p) => /(special|offer|promo|vip|membership|payment-plan|financ|gift|package|bank|discount|affiliate)/.test(p) },
+    test: (p) => /(special|offer|promo|vip|membership|payment-plan|payment|financ|cherry|carecredit|patientfi|alphaeon|gift|package|bank|discount|affiliate)/i.test(p) },
   { key: "proof", label: "Proof & trust", scope: "recommended",
-    test: (p) => /(review|testimonial|gallery|results|partner)/.test(p) },
+    test: (p) => /(review|testimonial|gallery|results|partner)/i.test(p) },
   { key: "shop", label: "Store & products", scope: "out-of-scope",
-    test: (p, src) => src === "product" || /^\/(shop|store|product|cart|checkout|my-account)/.test(p) },
+    test: (p, src) => src === "product" || /^\/(shop|store|product|cart|checkout|my-account)/i.test(p) },
   { key: "blog", label: "Blog & articles", scope: "out-of-scope",
-    test: (p, src) => src === "post" || /^\/(blog|blogs|news|article)/.test(p) },
+    test: (p, src) => src === "post" || /^\/(blog|blogs|news|article)/i.test(p) },
   // "sitemap" used to be a bare keyword here and wrongly caught a marketing
   // "/html-sitemap/" page (a site-navigation index, not a legal document) —
   // confirmed live on conqraesthetics. Require "xml-sitemap" specifically.
   { key: "legal", label: "Legal & policy", scope: "out-of-scope",
-    test: (p) => /(privacy|terms|policy|policies|accessibility|hipaa|disclaimer|xml-sitemap)/.test(p) },
+    test: (p) => /(privacy|terms|policy|policies|accessibility|hipaa|disclaimer|xml-sitemap)/i.test(p) },
   { key: "careers", label: "Careers", scope: "out-of-scope",
-    test: (p) => /(career|job|employment|hiring)/.test(p) },
+    test: (p) => /(career|job|employment|hiring)/i.test(p) },
 ];
 
-export function classifyPage(pathname: string, source: string): Section {
+export function classifyPage(pathname: string, source: string, navCategory?: string): Section {
   // The sitemap a URL came from is authoritative about WHAT it is, so content type
   // wins before any path guess. Without this, blog posts whose titles mention a
   // treatment or a town were being counted as treatment/location pages to build.
@@ -116,6 +116,20 @@ export function classifyPage(pathname: string, source: string): Section {
   for (const s of SECTIONS) {
     if (s.test && s.test(pathname, source)) return s;
   }
+
+  // Direct navigation structure hint: if the URL was located inside a known
+  // navigation dropdown or header section (e.g. under "Services" or "Payment Plans"),
+  // honor the website's own explicit categorization!
+  if (navCategory) {
+    const navSection = SECTIONS.find((s) => s.key === navCategory);
+    if (navSection) return navSection;
+  }
+
+  // If discovered via a portfolio custom post type or nav:service, default to service
+  if (source === "portfolio" || source === "nav:service") {
+    return serviceSection;
+  }
+
   return { key: "other", label: "Other pages", scope: "review" };
 }
 
@@ -188,10 +202,10 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
 
   for (const p of pages) {
     if (!p.isPage) continue; // products/videos/etc. handled by store/crawl counts
-    const section = classifyPage(p.path, p.source);
+    const section = classifyPage(p.path, p.source, p.navCategory);
     // "portfolio" pages that fell through to "other" are ambiguous custom-post-type
     // items — hold them for batched AI adjudication instead of mis-bucketing.
-    if (section.key === "other" && p.source === "portfolio") {
+    if (section.key === "other" && (p.source === "portfolio" || p.navCategory === "service")) {
       uncertainPages.push(p);
       continue;
     }
@@ -206,7 +220,7 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
 
   const { value: resolved, timedOut: adjudicationTimedOut } = await withInternalTimeout(
     adjudicateUncertain(uncertainPages).catch(() => new Map<string, "service" | "condition">()),
-    20000,
+    35000,
     new Map<string, "service" | "condition">()
   );
   if (adjudicationTimedOut && uncertainPages.length) {
@@ -232,9 +246,9 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
   // ~250 correctly-classified pages along with it.
   const contentChecked = otherPages.slice(0, MAX_CONTENT_FETCH);
   const { value: signals, timedOut: contentFetchTimedOut } = await withInternalTimeout(
-    fetchContentSignals(contentChecked.map((p) => p.url)).catch(() => new Map<string, { looksLikeProduct: boolean }>()),
-    20000,
-    new Map<string, { looksLikeProduct: boolean }>()
+    fetchContentSignals(contentChecked.map((p) => p.url)).catch(() => new Map<string, { looksLikeProduct: boolean; looksLikeService?: boolean }>()),
+    35000,
+    new Map<string, { looksLikeProduct: boolean; looksLikeService?: boolean }>()
   );
   if (contentFetchTimedOut && contentChecked.length) {
     warnings.push(`Content fetch for ${contentChecked.length} ambiguous pages timed out — they were left as "other" instead of checked for a product page.`);
@@ -243,7 +257,14 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
     warnings.push(`${otherPages.length} pages landed in "other"; only the first ${MAX_CONTENT_FETCH} were content-checked for a product page.`);
   }
   for (const p of otherPages) {
-    push(signals.get(p.url)?.looksLikeProduct ? "shop" : "other", p.url);
+    const sig = signals.get(p.url);
+    if (sig?.looksLikeProduct) {
+      push("shop", p.url);
+    } else if (sig?.looksLikeService) {
+      push("service", p.url);
+    } else {
+      push("other", p.url);
+    }
   }
 
   return { byType, uncertainCount, warnings };
