@@ -15,7 +15,7 @@ const MAX_CONTENT_FETCH = 40;
 export type SectionKey =
   | "core" | "locations" | "forms" | "care" | "service" | "condition"
   | "beforeAfter" | "proof" | "offers" | "shop" | "blog" | "legal"
-  | "careers" | "media" | "other" | "uncertain";
+  | "careers" | "media" | "other" | "uncertain" | "events" | "education";
 
 interface Section {
   key: SectionKey;
@@ -133,8 +133,15 @@ export function classifyPage(pathname: string, source: string, navCategory?: str
   return { key: "other", label: "Other pages", scope: "review" };
 }
 
+export interface ClassifiedUrl {
+  url: string;
+  confidence?: number;
+  method?: string;
+  reason?: string;
+}
+
 export interface TaxonomyResult {
-  byType: Record<string, { count: number; urls: string[] }>;
+  byType: Record<string, { count: number; urls: ClassifiedUrl[] }>;
   uncertainCount: number;
   warnings: string[];
 }
@@ -160,23 +167,60 @@ async function withInternalTimeout<T>(promise: Promise<T>, ms: number, fallback:
 // (source === "portfolio") but matched neither service nor condition vocabulary
 // are genuinely ambiguous — batch them to Gemini in one call rather than
 // guessing or one-call-per-URL.
+type AdjudicatedCategory = "service" | "condition" | "blog" | "core" | "offers" | "forms" | "legal" | "proof" | "locations" | "care" | "other";
+
 async function adjudicateUncertain(
-  candidates: AnalyzedPage[]
-): Promise<Map<string, "service" | "condition">> {
-  const result = new Map<string, "service" | "condition">();
+  candidates: AnalyzedPage[],
+  signals: Map<string, { title: string; h1: string; metaDescription: string }>
+): Promise<Map<string, AdjudicatedCategory>> {
+  const result = new Map<string, AdjudicatedCategory>();
   if (!candidates.length || !geminiAvailable()) return result;
 
-  const list = candidates.slice(0, 200).map((p) => `${p.path} :: ${p.title}`).join("\n");
-  const prompt = `You classify med-spa website pages as either "service" (a treatment/procedure the clinic performs — e.g. Botox, laser hair removal, microneedling) or "condition" (a patient complaint/diagnosis — e.g. melasma, acne scarring, hair loss).
-For each line below (format: path :: title), reply with ONLY the path followed by " => service" or " => condition", one per line, no other text.
+  const list = candidates.slice(0, 200).map((p) => {
+    // Prefer content-fetched signals over slug-derived title — the fetched
+    // title/h1/metaDescription give the LLM enough context to classify accurately.
+    const sig = signals.get(p.url);
+    const label = sig
+      ? `${sig.title}${sig.h1 ? ` | ${sig.h1}` : ""}${sig.metaDescription ? ` — ${sig.metaDescription.substring(0, 80)}` : ""}`
+      : p.title || p.path;
+    return `${p.path} :: ${label}`;
+  }).join("\n");
+  const prompt = `You classify med-spa website pages into one of these categories:
+- "service": a specific treatment or procedure (Botox, laser hair removal, microneedling, facials, body contouring)
+- "condition": a patient diagnosis or symptom (melasma, acne, rosacea, hair loss)
+- "blog": editorial/informational content (guides, how-to, comparisons, tips)
+- "core": homepage, about, team/provider bios, contact, general services/treatments hub pages
+- "offers": pricing pages, memberships, specials, financing, payment plans
+- "forms": booking, consultation forms, quizzes
+- "legal": privacy policy, terms, HIPAA, accessibility
+- "proof": reviews, testimonials, before-and-after galleries
+- "other": anything that doesn't fit the above
+
+IMPORTANT RULES:
+- "How often...", "What is...", "X vs Y" and informational guides are ALWAYS "blog"
+- Provider/staff bio pages (e.g. /jane-smith-np/ or /meet-dr-jones/) are "core"
+- A page titled "Prices" or "Treatment Prices" is "offers"
+- Single-word category hub pages like /skin/, /body/, /medical/ on a spa site are "service"
+
+For each line below (path :: title), reply with ONLY the path followed by " => <category>", one per line.
+
+Examples:
+/laser-hair-removal/ :: Laser Hair Removal => service
+/acne-scarring/ :: Treating Acne Scars => condition
+/how-often-should-you-get-a-chemical-peel/ :: How Often Should You Get a Chemical Peel? => blog
+/about-us/ :: About Our Team => core
+/jill-mcgraw-pa-c/ :: Jill McGraw, PA-C | Confidence That Blooms => core
+/prices/ :: Treatment Prices => offers
+/body/ :: Body | Expert Body Treatments => service
+/skin/ :: Skin | Expert Skin Treatments => service
 
 ${list}`;
 
   try {
     const text = await geminiCall([{ text: prompt }], { temperature: 0, maxOutputTokens: 4000 });
     for (const line of text.split("\n")) {
-      const m = line.match(/^(\S+)\s*=>\s*(service|condition)/i);
-      if (m) result.set(m[1]!, m[2]!.toLowerCase() as "service" | "condition");
+      const m = line.match(/(?:^|[-*]\s*)(\S+?)(?:\s*::.*?)?\s*=>\s*(service|condition|blog|core|offers|forms|legal|proof|locations|care|other)/i);
+      if (m) result.set(m[1]!, m[2]!.toLowerCase() as AdjudicatedCategory);
     }
   } catch {
     // AI adjudication is best-effort; leftover candidates stay in "uncertain".
@@ -184,86 +228,114 @@ ${list}`;
   return result;
 }
 
+import { runClassificationPipeline } from "./classification/pipeline.js";
+import { batchCheckExceptions } from "./classification/exceptionStore.js";
+
 /** Classify every discovered page into the taxonomy, with AI adjudication for the ambiguous remainder. */
 export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResult> {
-  const byType: Record<string, { count: number; urls: string[] }> = {};
-  const push = (key: string, url: string) => {
+  const byType: Record<string, { count: number; urls: ClassifiedUrl[] }> = {};
+  const push = (key: string, classifiedUrl: ClassifiedUrl) => {
     if (!byType[key]) byType[key] = { count: 0, urls: [] };
     byType[key].count++;
-    byType[key].urls.push(url);
+    byType[key].urls.push(classifiedUrl);
   };
 
   const uncertainPages: AnalyzedPage[] = [];
-  // Generic "other" pages (not portfolio-sourced) are candidates for a real
-  // content fetch — this is where a branded product page like "/alastin/"
-  // lives: no "shop"/"product" string anywhere in its URL, so regex alone
-  // can never place it (confirmed in ACCURACY-PLAN.md's baseline).
   const otherPages: AnalyzedPage[] = [];
+  const fastMatches = new Map<string, Section>();
 
   for (const p of pages) {
-    if (!p.isPage) continue; // products/videos/etc. handled by store/crawl counts
+    if (!p.isPage) continue; 
     const section = classifyPage(p.path, p.source, p.navCategory);
-    // "portfolio" pages that fell through to "other" are ambiguous custom-post-type
-    // items — hold them for batched AI adjudication instead of mis-bucketing.
-    if (section.key === "other" && (p.source === "portfolio" || p.navCategory === "service")) {
-      uncertainPages.push(p);
-      continue;
+    fastMatches.set(p.url, section);
+    
+    if (section.key === "other" || section.key === "uncertain") {
+      if (p.source === "portfolio" || p.navCategory === "service") {
+        uncertainPages.push(p);
+      } else {
+        otherPages.push(p);
+      }
     }
-    if (section.key === "other") {
-      otherPages.push(p);
-      continue;
-    }
-    push(section.key, p.url);
   }
 
   const warnings: string[] = [];
-
-  const { value: resolved, timedOut: adjudicationTimedOut } = await withInternalTimeout(
-    adjudicateUncertain(uncertainPages).catch(() => new Map<string, "service" | "condition">()),
+  
+  // 1. Fetch content for ambiguous pages (up to limit)
+  const pagesToFetch = [...uncertainPages, ...otherPages].slice(0, MAX_CONTENT_FETCH);
+  const { value: signals, timedOut: contentFetchTimedOut } = await withInternalTimeout(
+    fetchContentSignals(pagesToFetch.map((p) => p.url)).catch(() => new Map<string, any>()),
     35000,
-    new Map<string, "service" | "condition">()
+    new Map<string, any>()
   );
-  if (adjudicationTimedOut && uncertainPages.length) {
-    warnings.push(`AI adjudication of ${uncertainPages.length} ambiguous pages timed out — they were left as "uncertain" instead.`);
+  
+  if (contentFetchTimedOut && pagesToFetch.length) {
+    warnings.push(`Content fetch for ${pagesToFetch.length} ambiguous pages timed out.`);
   }
-  let uncertainCount = 0;
-  for (const p of uncertainPages) {
-    const verdict = resolved.get(p.path);
-    if (verdict) push(verdict, p.url);
-    else {
-      push("uncertain", p.url);
-      uncertainCount++;
+
+  // 2. Pre-load exception store overrides in ONE batch query across all pages
+  const exceptionsMap = await batchCheckExceptions(pages.map((p) => p.url));
+
+  // 3. Run pipeline for ALL pages
+  const llmAdjudicationQueue: AnalyzedPage[] = [];
+
+  for (const p of pages) {
+    if (!p.isPage) continue;
+    const fastMatch = fastMatches.get(p.url)!;
+    const sig = signals.get(p.url);
+    
+    // Check shop/product via fetch signals first if available
+    if (sig?.looksLikeProduct) {
+       push("shop", { url: p.url, method: "content_signals", confidence: 0.9, reason: "Product JSON-LD or meta tags detected" });
+       continue;
+    }
+    
+    const textSample = sig ? `${sig.title} ${sig.h1} ${sig.metaDescription}` : "";
+    const title = sig?.title || "";
+
+    const result = await runClassificationPipeline(
+      p,
+      title,
+      textSample,
+      fastMatch,
+      exceptionsMap.get(p.url) || null
+    );
+    
+    if (result.method === "unresolved" && result.category === "uncertain") {
+       // Portfolio/nav:service pages are always worth LLM adjudication.
+       // Non-portfolio pages (e.g. Squarespace source:"page") are also worth
+       // LLM adjudication IF the content fetcher got real text for the LLM to
+       // use. An empty textSample means the LLM has nothing to work with.
+       const hasRealContent = textSample.trim().length > 20;
+       if (uncertainPages.includes(p) || hasRealContent) {
+         llmAdjudicationQueue.push(p);
+       } else {
+         push("other", { url: p.url, method: "fallback", confidence: 0, reason: "Passed through pipeline unrecognized" });
+       }
+    } else {
+       push(result.category, { url: p.url, method: result.method, confidence: result.confidence, reason: result.reason });
     }
   }
 
-  // Content-based reclassification for the bounded "other" set: a real page
-  // fetch checking for Product JSON-LD / og:type=product / a WooCommerce
-  // add-to-cart button beats guessing from the URL alone. Best-effort and
-  // internally time-boxed — a slow or failed fetch just leaves those pages in
-  // "other" rather than blocking (or, worse, silently discarding) the rest of
-  // the already-computed taxonomy. Confirmed live: a large Divi site's
-  // content-fetch step overran the OLD outer-only timeout and wiped out all
-  // ~250 correctly-classified pages along with it.
-  const contentChecked = otherPages.slice(0, MAX_CONTENT_FETCH);
-  const { value: signals, timedOut: contentFetchTimedOut } = await withInternalTimeout(
-    fetchContentSignals(contentChecked.map((p) => p.url)).catch(() => new Map<string, { looksLikeProduct: boolean; looksLikeService?: boolean }>()),
-    35000,
-    new Map<string, { looksLikeProduct: boolean; looksLikeService?: boolean }>()
-  );
-  if (contentFetchTimedOut && contentChecked.length) {
-    warnings.push(`Content fetch for ${contentChecked.length} ambiguous pages timed out — they were left as "other" instead of checked for a product page.`);
-  }
-  if (otherPages.length > MAX_CONTENT_FETCH) {
-    warnings.push(`${otherPages.length} pages landed in "other"; only the first ${MAX_CONTENT_FETCH} were content-checked for a product page.`);
-  }
-  for (const p of otherPages) {
-    const sig = signals.get(p.url);
-    if (sig?.looksLikeProduct) {
-      push("shop", p.url);
-    } else if (sig?.looksLikeService) {
-      push("service", p.url);
-    } else {
-      push("other", p.url);
+  // 3. Batch LLM Adjudication for the leftovers
+  let uncertainCount = 0;
+  if (llmAdjudicationQueue.length > 0) {
+    const { value: resolved, timedOut: adjudicationTimedOut } = await withInternalTimeout(
+      adjudicateUncertain(llmAdjudicationQueue, signals).catch(() => new Map<string, AdjudicatedCategory>()),
+      35000,
+      new Map<string, AdjudicatedCategory>()
+    );
+    if (adjudicationTimedOut) {
+      warnings.push(`AI adjudication of ${llmAdjudicationQueue.length} ambiguous pages timed out.`);
+    }
+    
+    for (const p of llmAdjudicationQueue) {
+      const verdict = resolved.get(p.path);
+      if (verdict) {
+        push(verdict, { url: p.url, method: "llm_adjudication", confidence: 0.8, reason: `LLM selected ${verdict}` });
+      } else {
+        push("uncertain", { url: p.url, method: "llm_adjudication", confidence: 0.5, reason: "LLM was unable to classify definitively" });
+        uncertainCount++;
+      }
     }
   }
 

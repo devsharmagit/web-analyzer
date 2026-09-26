@@ -88,29 +88,26 @@ export interface CrawlResult {
   durationMs: number;
 }
 
-// Status codes that specifically mean "a WAF/bot-protection service is
-// blocking us" rather than "this URL doesn't exist" or "transient network
-// error" — worth a distinct, actionable warning instead of the generic
-// catch-all "may be JS-rendered or blocking us".
-const BLOCKED_STATUSES = new Set([401, 403, 429, 503]);
+import { fetchWithFallback, WAF_BLOCKED_STATUSES } from "./fetchWithFallback.js";
 
-async function fetchText(url: string, timeoutMs = 15000, onStatus?: (status: number) => void): Promise<string> {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, { redirect: "follow", signal: ctl.signal, headers: { "User-Agent": UA } });
-    onStatus?.(r.status);
-    if (!r.ok) {
-      console.error(`fetchText: Failed to fetch ${url} - Status: ${r.status}`);
-      return "";
-    }
-    return await r.text();
-  } catch (err) {
-    console.error(`fetchText: Error fetching ${url}:`, err);
-    return "";
-  } finally {
-    clearTimeout(timer);
+async function fetchText(
+  url: string,
+  timeoutMs = 15000,
+  onStatus?: (status: number, wasBlockedAndUnresolved?: boolean) => void
+): Promise<string> {
+  const res = await fetchWithFallback(url, {
+    timeoutMs,
+    headers: { "User-Agent": UA },
+  });
+  if (onStatus) {
+    const isUnresolvedBlock = !res.ok && WAF_BLOCKED_STATUSES.has(res.status);
+    onStatus(res.status, isUnresolvedBlock);
   }
+  if (!res.ok) {
+    console.error(`fetchText: Failed to fetch ${url} - Status: ${res.status} (${res.tier})`);
+    return "";
+  }
+  return res.html;
 }
 
 const locsOf = (xml: string): string[] =>
@@ -262,9 +259,9 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   // 403 on every single request from Render's production IP.
   const blockedStatuses: number[] = [];
   let totalFetches = 0;
-  const trackStatus = (status: number) => {
+  const trackStatus = (status: number, wasBlockedAndUnresolved?: boolean) => {
     totalFetches++;
-    if (BLOCKED_STATUSES.has(status)) blockedStatuses.push(status);
+    if (wasBlockedAndUnresolved) blockedStatuses.push(status);
   };
 
   let origin: string;
@@ -329,6 +326,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     const source = sourceOfSitemap(sm);
     const xml = await fetchText(sm, undefined, trackStatus);
     if (!xml) {
+      warnings.push(`Child sitemap could not be fetched: ${sm}`);
       continue;
     }
     for (const u of locsOf(xml)) add(u, source);

@@ -7,6 +7,44 @@ interface GeminiPart {
   text: string;
 }
 
+export async function embedText(text: string): Promise<number[]> {
+  const GEMINI_KEYS = keys();
+  if (!GEMINI_KEYS.length) throw new Error("No GEMINI_KEYS configured");
+  
+  const key = GEMINI_KEYS[gkIdx % GEMINI_KEYS.length]!;
+  
+  const body = {
+    model: "models/gemini-embedding-2",
+    content: { parts: [{ text }] }
+  };
+  
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+    body: JSON.stringify(body)
+  });
+  
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Embedding API error: ${res.status} ${errorText}`);
+  }
+  const data = await res.json();
+  return data.embedding.values;
+}
+
+export function cosineSimilarity(vecA: number[], vecB: number[]): number {
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i]! * vecB[i]!;
+    normA += vecA[i]! * vecA[i]!;
+    normB += vecB[i]! * vecB[i]!;
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
 interface GeminiCallOpts {
   system?: string;
   model?: string;

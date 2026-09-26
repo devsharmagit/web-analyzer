@@ -217,7 +217,8 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
         </div>
         <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
           <tbody>` +
-          bucket.urls.map((u) => {
+          bucket.urls.map((uObj) => {
+            const u = uObj.url;
             let pathDisplay = u;
             try {
               const parsed = new URL(u);

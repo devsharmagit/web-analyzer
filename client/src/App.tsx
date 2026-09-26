@@ -412,8 +412,8 @@ function TabPages({ pages, beforeAfterGallery }: { pages: AnalyzeResult["pages"]
               <p className="text-sm font-medium text-[var(--color-muted)] mb-3">Unclassified URLs:</p>
               <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2 text-xs text-[var(--color-text)] max-h-48 overflow-y-auto custom-scrollbar pr-2">
                 {uncertainUrls.map((u) => (
-                  <li key={u} className="truncate">
-                    <a href={u} target="_blank" rel="noreferrer" className="hover:underline hover:text-[var(--color-accent)]">{u}</a>
+                  <li key={u.url} className="truncate" title={u.reason || u.method}>
+                    <a href={u.url} target="_blank" rel="noreferrer" className="hover:underline hover:text-[var(--color-accent)]">{u.url}</a>
                   </li>
                 ))}
               </ul>
@@ -444,9 +444,9 @@ function TabPages({ pages, beforeAfterGallery }: { pages: AnalyzeResult["pages"]
               )}
               <ul className="flex-1 overflow-y-auto px-5 py-4 text-xs max-h-56 custom-scrollbar">
                 {bucket.urls.slice(0, 50).map((u) => (
-                  <li key={u} className="py-1.5 border-b border-[var(--color-border)]/30 last:border-0">
-                    <a href={u} target="_blank" rel="noreferrer" className="block truncate text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors">
-                      {u.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").replace(/\/$/, "")}
+                  <li key={u.url} className="py-1 border-b border-[var(--color-border)]/30 last:border-0" title={u.reason ? `${u.method}: ${u.reason} (${Math.round((u.confidence || 0) * 100)}%)` : u.method}>
+                    <a href={u.url} target="_blank" rel="noreferrer" className="block truncate text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors">
+                      {u.url.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").replace(/\/$/, "")}
                     </a>
                   </li>
                 ))}
