@@ -25,9 +25,16 @@ export interface StoreResult {
   notes?: string;
 }
 
+export interface ClassifiedUrl {
+  url: string;
+  confidence?: number;
+  method?: string;
+  reason?: string;
+}
+
 export interface TypeBucket {
   count: number;
-  urls: string[];
+  urls: ClassifiedUrl[];
 }
 
 export interface Provider {

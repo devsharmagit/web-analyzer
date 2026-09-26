@@ -2,19 +2,13 @@
 // plain fetch + regex only (targets are WordPress-heavy sites where this is
 // enough; see ANALYZER-SCOPE.md decision to skip a headless browser budget).
 
+import { fetchWithFallback } from "./fetchWithFallback.js";
+
 const UA = "Mozilla/5.0 (compatible; G99-Analyzer/1.0)";
 
 export async function fetchHtml(url: string, timeoutMs = 15000): Promise<string> {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, { redirect: "follow", signal: ctl.signal, headers: { "User-Agent": UA } });
-    return r.ok ? await r.text() : "";
-  } catch {
-    return "";
-  } finally {
-    clearTimeout(timer);
-  }
+  const res = await fetchWithFallback(url, { timeoutMs, headers: { "User-Agent": UA } });
+  return res.ok ? res.html : "";
 }
 
 /** Extract every JSON-LD <script type="application/ld+json"> block as parsed JSON. */

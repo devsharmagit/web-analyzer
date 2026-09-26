@@ -28,17 +28,11 @@ export interface StoreResult {
   notes?: string;
 }
 
+import { fetchWithFallback } from "./fetchWithFallback.js";
+
 async function fetchText(url: string, timeoutMs = 25000): Promise<string> {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, { redirect: "follow", signal: ctl.signal, headers: { "User-Agent": UA } });
-    return r.ok ? await r.text() : "";
-  } catch {
-    return "";
-  } finally {
-    clearTimeout(timer);
-  }
+  const res = await fetchWithFallback(url, { timeoutMs, headers: { "User-Agent": UA } });
+  return res.ok ? res.html : "";
 }
 
 async function fetchStatus(url: string, timeoutMs = 8000): Promise<number> {

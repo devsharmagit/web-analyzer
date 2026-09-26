@@ -6,6 +6,7 @@ import { detectLocations, type LocationsResult } from "./locations.js";
 import { detectBeforeAfterGallery, type BeforeAfterResult } from "./beforeAfter.js";
 
 import { fetchHtml } from "./scrapeLite.js";
+import { getSessionCredits } from "./fetchWithFallback.js";
 
 export interface AnalyzeResult {
   url: string;
@@ -19,7 +20,9 @@ export interface AnalyzeResult {
   providers: ProvidersResult;
   locations: LocationsResult;
   beforeAfterGallery: BeforeAfterResult;
-  crawl: Pick<CrawlResult, "discoveredVia" | "sitemaps" | "urlsSeen" | "durationMs" | "warnings">;
+  crawl: Pick<CrawlResult, "discoveredVia" | "sitemaps" | "urlsSeen" | "durationMs" | "warnings"> & {
+    scraperApiCreditsUsed?: number;
+  };
 }
 
 // Tags the fallback with a "timed out" reason only when the timeout branch
@@ -64,7 +67,7 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
   });
 
   const taxonomy = await taxonomyPromise;
-  const beforeAfterPromise = withTimeout(detectBeforeAfterGallery(taxonomy.byType.beforeAfter?.urls || []), 60000, {
+  const beforeAfterPromise = withTimeout(detectBeforeAfterGallery((taxonomy.byType.beforeAfter?.urls || []).map(u => u.url)), 60000, {
     pageUrl: null,
     imageCount: 0,
     caseCount: "unknown" as const,
@@ -93,14 +96,39 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
   // the outer-safety-net "reason" (if THAT fired instead) alongside crawl's —
   // one place in the response for "here's what you should not fully trust."
   const allWarnings = [...crawl.warnings, ...taxonomy.warnings];
-  if ("reason" in taxonomy && typeof (taxonomy as any).reason === "string") {
+  const isTaxonomyTimedOut = "reason" in taxonomy && typeof (taxonomy as any).reason === "string";
+  if (isTaxonomyTimedOut) {
     allWarnings.push(`Page classification: ${(taxonomy as any).reason}`);
+  }
+
+  // If taxonomy timed out or failed, report an honest error state:
+  // All discovered pages that are real pages are marked as uncertain rather than 0.
+  const pageCandidates = crawl.pages.filter((p) => p.isPage);
+  let finalByType = taxonomy.byType;
+  let finalUncertainCount = taxonomy.uncertainCount;
+
+  if (isTaxonomyTimedOut && Object.keys(finalByType).length === 0 && pageCandidates.length > 0) {
+    finalUncertainCount = pageCandidates.length;
+    finalByType = {
+      uncertain: {
+        count: pageCandidates.length,
+        urls: pageCandidates.map((p) => ({
+          url: p.url,
+          method: "unresolved",
+          confidence: 0,
+          reason: "Classification incomplete: taxonomy analysis timed out",
+        })),
+      },
+    };
+    allWarnings.push(
+      `Classification incomplete: taxonomy analysis timed out before completing; ${pageCandidates.length} pages left unclassified.`
+    );
   }
 
   return {
     url: crawl.origin,
     platform,
-    pages: { total: crawl.total, byType: taxonomy.byType, uncertainCount: taxonomy.uncertainCount },
+    pages: { total: crawl.total, byType: finalByType, uncertainCount: finalUncertainCount },
     store,
     providers,
     locations,
@@ -111,6 +139,7 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
       urlsSeen: crawl.urlsSeen,
       durationMs: crawl.durationMs,
       warnings: allWarnings,
+      scraperApiCreditsUsed: getSessionCredits(),
     },
   };
 }

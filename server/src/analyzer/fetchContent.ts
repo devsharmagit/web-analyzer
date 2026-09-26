@@ -13,6 +13,7 @@
 import "./crawleeBootstrap.js";
 import { CheerioCrawler, RequestQueue } from "crawlee";
 import { randomUUID } from "node:crypto";
+import { fetchWithFallback } from "./fetchWithFallback.js";
 
 // Crawlee's default (unnamed) RequestQueue persists request-fingerprint dedup
 // state on disk across separate crawler.run() calls within the same process
@@ -41,7 +42,6 @@ export interface ContentSignals {
   h1: string;
   metaDescription: string;
   looksLikeProduct: boolean;
-  looksLikeService?: boolean;
   fetchFailed: boolean;
 }
 
@@ -50,8 +50,9 @@ const EMPTY_SIGNALS: Omit<ContentSignals, "fetchFailed"> = {
   h1: "",
   metaDescription: "",
   looksLikeProduct: false,
-  looksLikeService: false,
 };
+
+import * as cheerio from "cheerio";
 
 /** Fetch content signals for a bounded list of URLs, concurrently, with retries. */
 export async function fetchContentSignals(
@@ -60,6 +61,10 @@ export async function fetchContentSignals(
 ): Promise<Map<string, ContentSignals>> {
   const results = new Map<string, ContentSignals>();
   if (!urls.length) return results;
+
+  // URLs that failed during Crawlee (HTTP/2 stream refused, WAF block, connection drop)
+  // queued for resilient fallback (Direct Node fetch first -> ScraperAPI plain fallback).
+  const failedUrls: string[] = [];
 
   await runIsolatedCrawler(urls, {
     maxConcurrency: opts.maxConcurrency ?? 5,
@@ -77,29 +82,77 @@ export async function fetchContentSignals(
         /class=["'][^"']*shopify-payment-button[^"']*["']/i.test(html); // Shopify
 
       const title = $("title").first().text().trim();
-      const h1 = $("h1").first().text().trim();
+      const h1Text = $("h1").first().text().trim();
+      const h2Sub = $("h2").slice(0, 3).map((_i, el) => $(el).text().trim()).get().filter(Boolean).join(" | ");
+      const h1 = h2Sub ? (h1Text ? `${h1Text} | ${h2Sub}` : h2Sub) : h1Text;
       const metaDescription = $('meta[name="description"]').attr("content")?.trim() || "";
-      const textSample = `${title} ${h1} ${metaDescription}`;
-      const looksLikeService =
-        !looksLikeProduct &&
-        /(botox|dysport|filler|biostimulat|laser|peel|facial|treatment|procedure|inject|microneedl|contour|tightening|skincare|resurfac|rejuvenat|body-treatment)/i.test(textSample);
 
       results.set(request.url, {
         title,
         h1,
         metaDescription,
         looksLikeProduct,
-        looksLikeService,
         fetchFailed: false,
       });
     },
     failedRequestHandler({ request }) {
-      results.set(request.url, { ...EMPTY_SIGNALS, fetchFailed: true });
+      failedUrls.push(request.url);
     },
   });
 
+  // Resilient fallback pass — runs after Crawlee finishes for any failed URLs.
+  // Direct fetch (Node HTTP/1.1) is tried first; on WAF/bot-block, falls back to ScraperAPI.
+  if (failedUrls.length > 0) {
+    await Promise.all(
+      failedUrls.map(async (url) => {
+        try {
+          const resp = await fetchWithFallback(url, {
+            timeoutMs: 12000,
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+              Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
+            },
+          });
+          if (!resp.ok) {
+            results.set(url, { ...EMPTY_SIGNALS, fetchFailed: true });
+            return;
+          }
+          const html = resp.html;
+          const $ = cheerio.load(html);
+
+          const title = $("title").first().text().trim();
+          const h1Text = $("h1").first().text().trim();
+          const h2Sub = $("h2").slice(0, 3).map((_i, el) => $(el).text().trim()).get().filter(Boolean).join(" | ");
+          const h1 = h2Sub ? (h1Text ? `${h1Text} | ${h2Sub}` : h2Sub) : h1Text;
+          const metaDescription = $('meta[name="description"]').attr("content")?.trim() || "";
+          const looksLikeProduct =
+            /property=["']og:type["']\s+content=["']product["']/i.test(html) ||
+            /woocommerce-Price-amount/i.test(html) ||
+            /name=["']add-to-cart["']/i.test(html) ||
+            /class=["'][^"']*sqs-add-to-cart-button[^"']*["']/i.test(html) ||
+            /name=["']add["'][^>]*>.*add to cart/i.test(html) ||
+            /class=["'][^"']*ProductActionButtons[^"']*["']/i.test(html) ||
+            /class=["'][^"']*shopify-payment-button[^"']*["']/i.test(html);
+
+          results.set(url, {
+            title,
+            h1,
+            metaDescription,
+            looksLikeProduct,
+            fetchFailed: false,
+          });
+        } catch {
+          results.set(url, { ...EMPTY_SIGNALS, fetchFailed: true });
+        }
+      })
+    );
+  }
+
   return results;
 }
+
 
 export interface ImageCandidate {
   src: string;
