@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { analyze, type AnalyzeResult, type Detection } from "./api";
 import { oneLineSummary } from "./summarize";
-import { generateReportHtml } from "./report";
+import { generateReportHtml, ASSET_RE } from "./report";
 import html2pdf from "html2pdf.js";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -382,7 +382,7 @@ function TabOverview({ result }: { result: AnalyzeResult }) {
                 {store.isThirdParty
                   ? `Third-party store integration detected (${store.thirdPartyIntegrations?.join(", ") || "Partner Portal"}). Products found on /shop are fulfilled via external partner portals rather than a native self-hosted cart.`
                   : store.hasStore
-                    ? `Active store detected (${store.platform ?? "unknown platform"}). Found ${store.productCount} products across ${store.categoryCount} categories.`
+                    ? `Active store detected (${store.platform ?? "unknown platform"}). Found ${store.productCount} product${store.productCount === 1 ? "" : "s"} across ${store.categoryCount} categor${store.categoryCount === 1 ? "y" : "ies"}.`
                     : store.platform
                       ? `${store.platform} is installed, but no products were found. Not an active store.`
                       : "No store detected on this site."}
@@ -425,20 +425,32 @@ function TabPages({ pages, beforeAfterGallery }: { pages: AnalyzeResult["pages"]
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {Object.entries(pages.byType)
           .filter(([type]) => type !== "uncertain")
+          .map(([type, bucket]) => {
+            const cleanUrls = bucket.urls.filter((u) => !ASSET_RE.test(u.url));
+            return [type, { ...bucket, count: cleanUrls.length, urls: cleanUrls }] as const;
+          })
+          .filter(([_, bucket]) => bucket.count > 0)
           .sort((a, b) => b[1].count - a[1].count)
           .map(([type, bucket]) => (
             <div key={type} className="flex flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] shadow-sm transition hover:border-[var(--color-border)]/80">
               <div className="flex items-center justify-between border-b border-[var(--color-border)]/50 bg-[var(--color-bg)]/30 px-5 py-4">
-                <span className="font-semibold capitalize text-[var(--color-text)]">{type}</span>
+                <span className="font-semibold capitalize text-[var(--color-text)]">
+                  {type === "locations" ? "Local SEO Pages" : type}
+                </span>
                 <span className="rounded-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2.5 py-0.5 text-xs font-semibold">{bucket.count}</span>
               </div>
+              {type === "shop" && bucket.urls.some((u) => /\/(cart|checkout|my-account|order-tracking|wishlist|account|basket)(\/|$)/i.test(u.url)) && (
+                <div className="border-b border-[var(--color-border)]/50 bg-[var(--color-bg)]/30 px-5 py-2 text-xs text-[var(--color-muted)]">
+                  {bucket.urls.filter((u) => !/\/(cart|checkout|my-account|order-tracking|wishlist|account|basket)(\/|$)/i.test(u.url)).length} storefront pages ({bucket.count} total incl. account plumbing)
+                </div>
+              )}
               {type === "beforeAfter" && typeof beforeAfterGallery.caseCount === "number" && (
                 <div
                   className="border-b border-[var(--color-border)]/50 bg-[var(--color-bg)]/30 px-5 py-2.5 text-xs text-[var(--color-muted)]"
                   title={beforeAfterGallery.evidence.join(" ")}
                 >
                   <b className="text-[var(--color-text)]">{beforeAfterGallery.caseCount}</b> distinct before/after case
-                  {beforeAfterGallery.caseCount === 1 ? "" : "s"} ({beforeAfterGallery.imageCount} images)
+                  {beforeAfterGallery.caseCount === 1 ? "" : "s"}
                   {beforeAfterGallery.confidence === "unknown" && " — estimated"}
                 </div>
               )}

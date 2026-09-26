@@ -1,5 +1,5 @@
 import { oneLineSummary } from "./summarize";
-import type { AnalyzeResult } from "./api";
+import type { AnalyzeResult, StoreResult, BeforeAfterGalleryResult, ProvidersResult, ClassifiedUrl } from "./api";
 
 function escapeHtml(s: string): string {
   return String(s || "")
@@ -10,10 +10,13 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-
+export const ASSET_RE = /\.(xml|kml|jpe?g|png|webp|gif|svg|pdf|css|js|ico|zip|mp4|webm|json|webmanifest|md|txt|csv|woff2?|ttf|otf|eot|fon|ttc|mp3|wav|ogg|m4a|avi|mov)(?:[?#/]|$)/i;
+export const ASSET_URL_RE = ASSET_RE;
+const SHOP_UTILITY_RE = /\/(cart|checkout|my-account|order-tracking|wishlist|account|basket)(\/|$)/i;
 
 function formatLabel(str: string): string {
   if (!str) return "Clinical Gallery";
+  if (str.toLowerCase() === "locations") return "Local SEO Pages";
   const words = str.replace(/[-_]+/g, " ").trim().split(" ");
   return words.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
 }
@@ -45,7 +48,131 @@ function extractProcedureName(urlStr: string): string {
   }
 }
 
+// ---- Sales Angle Interpretive Helpers (Part 4) -----------------------------
 
+function getECommerceInterpretiveLine(store: StoreResult): string | null {
+  const hasThirdParty = Boolean(store.isThirdParty || (store.thirdPartyIntegrations && store.thirdPartyIntegrations.length > 0));
+  const partners = store.thirdPartyIntegrations && store.thirdPartyIntegrations.length > 0
+    ? store.thirdPartyIntegrations.join(", ")
+    : "external partner portals";
+
+  // Case 1: Both native store AND third-party partner fulfillment
+  if (store.hasStore && hasThirdParty) {
+    if (store.productCount > 0 && store.productCount <= 15) {
+      return `Small in-house catalog (${store.productCount} products) paired with third-party fulfillment via ${partners} — hybrid e-commerce setup.`;
+    }
+    if (store.productCount > 15) {
+      return `Active in-house catalog (${store.productCount} products) alongside third-party fulfillment via ${partners} — established hybrid sales channel.`;
+    }
+    return `Native store infrastructure alongside third-party fulfillment via ${partners} — external online purchase paths.`;
+  }
+
+  // Case 2: Native store only
+  if (store.hasStore) {
+    if (store.productCount > 0 && store.productCount <= 15) {
+      return `Small in-house catalog (${store.productCount} products) — limited e-commerce footprint.`;
+    }
+    if (store.productCount > 15) {
+      return `Active in-house catalog (${store.productCount} products) — established direct online storefront.`;
+    }
+    if (store.platform) {
+      return `Installed storefront (${store.platform}) with no active products published.`;
+    }
+  }
+
+  // Case 3: Third-party only
+  if (hasThirdParty) {
+    return `Products fulfilled via ${partners} rather than a native store — no direct online purchase path on-site.`;
+  }
+
+  return null;
+}
+
+function getGalleryInterpretiveLine(gallery: BeforeAfterGalleryResult): string {
+  const hasGallery = gallery.imageCount > 0 || (gallery.images && gallery.images.length > 0) || (!!gallery.pageUrl && gallery.confidence !== "unknown");
+  if (hasGallery) {
+    if (typeof gallery.caseCount === "number" && gallery.caseCount > 0) {
+      return `Active gallery with ${gallery.caseCount} patient cases — usable as visible social proof.`;
+    }
+    if (gallery.imageCount > 0) {
+      return `Active gallery with ${gallery.imageCount} clinical photos — usable as visible social proof.`;
+    }
+    return "Active before-and-after gallery identified — usable as visible social proof.";
+  }
+  return "No before-and-after gallery found — a gap compared to clinics that lead with visual results.";
+}
+
+function getProvidersInterpretiveLine(providers: ProvidersResult): string | null {
+  const total = providers.list.length;
+  if (total === 0) return null;
+
+  let physicianCount = 0;
+  const physicianTypes: string[] = [];
+  let npCount = 0;
+  let paCount = 0;
+  let rnCount = 0;
+  let estheticianCount = 0;
+
+  for (const p of providers.list) {
+    const text = `${p.credentials || ""} ${p.role || ""}`.toUpperCase();
+    if (/\b(MD|DO)\b/.test(text) || /\b(PHYSICIAN|SURGEON|DOCTOR|MEDICAL DIRECTOR)\b/.test(text)) {
+      physicianCount++;
+      if (/\bMD\b/.test(text) && !physicianTypes.includes("MD")) physicianTypes.push("MD");
+      if (/\bDO\b/.test(text) && !physicianTypes.includes("DO")) physicianTypes.push("DO");
+    } else if (/\b(FNP|NP|NURSE PRACTITIONER|APRN)\b/.test(text)) {
+      npCount++;
+    } else if (/\b(PA|PA-C|PHYSICIAN ASSISTANT)\b/.test(text)) {
+      paCount++;
+    } else if (/\b(RN|REGISTERED NURSE)\b/.test(text)) {
+      rnCount++;
+    } else if (/\b(LME|LE|ESTHETICIAN|AESTHETICIAN)\b/.test(text)) {
+      estheticianCount++;
+    }
+  }
+
+  if (physicianCount > 0) {
+    const creds = physicianTypes.length > 0 ? ` (${physicianTypes.join("/")})` : "";
+    return `${total} licensed providers on staff, including ${physicianCount} physician-level credential${physicianCount === 1 ? "" : "s"}${creds}.`;
+  }
+
+  const clinicalRoles: string[] = [];
+  if (npCount > 0) clinicalRoles.push("nurse practitioner");
+  if (paCount > 0) clinicalRoles.push("physician assistant");
+  if (rnCount > 0) clinicalRoles.push("registered nurse");
+  if (estheticianCount > 0) clinicalRoles.push("aesthetician");
+
+  if (clinicalRoles.length > 0) {
+    const roleList = clinicalRoles.length === 1
+      ? clinicalRoles[0]
+      : clinicalRoles.length === 2
+        ? `${clinicalRoles[0]} and ${clinicalRoles[1]}`
+        : `${clinicalRoles.slice(0, -1).join(", ")}, and ${clinicalRoles[clinicalRoles.length - 1]}`;
+    return `${total} providers on staff, with clinical services delivered by ${roleList} roles.`;
+  }
+
+  return `${total} staff profiles listed across clinical and practice operations.`;
+}
+
+function getOffersInterpretiveLine(offersBucket: { count: number; urls: ClassifiedUrl[] } | undefined): string | null {
+  if (!offersBucket || !offersBucket.urls || offersBucket.urls.length === 0) return null;
+  const hasMembership = offersBucket.urls.some(u => /membership|vip|club/i.test(u.url));
+  const hasFinancing = offersBucket.urls.some(u => /financ|cherry|payment[-_]?plan/i.test(u.url));
+  const hasReferral = offersBucket.urls.some(u => /refer/i.test(u.url));
+
+  const items: string[] = [];
+  if (hasFinancing) items.push("financing");
+  if (hasMembership) items.push("membership options");
+  if (hasReferral) items.push("referral incentives");
+  if (items.length === 0) items.push("special promotions");
+
+  const leadIn = items.length === 1
+    ? items[0]
+    : items.length === 2
+      ? `${items[0]} and ${items[1]}`
+      : `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+
+  return `Offers ${leadIn} (${offersBucket.urls.length} page${offersBucket.urls.length === 1 ? "" : "s"}) — signals price-sensitive positioning.`;
+}
 
 /** @deprecated – kept for backwards compatibility; use generateStandaloneReport instead */
 export const REPORT_CSS = ``;
@@ -55,9 +182,21 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
   const { url, platform, pages, store, providers, locations, beforeAfterGallery, crawl } = result;
   const generatedAt = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 
-  // Pre-calculate summary stats
-  const totalUrls = pages.total || 0;
-  const categoriesCount = Object.keys(pages.byType).filter(k => pages.byType[k]?.urls?.length > 0).length;
+  // Sanitize pages.byType so asset/font URLs never enter the taxonomy counts or display
+  const sanitizedByType: Record<string, { count: number; urls: ClassifiedUrl[] }> = {};
+  let totalUrls = 0;
+  for (const [key, bucket] of Object.entries(pages.byType)) {
+    const cleanUrls = (bucket.urls || []).filter(u => !ASSET_URL_RE.test(u.url));
+    if (cleanUrls.length > 0) {
+      sanitizedByType[key] = {
+        count: cleanUrls.length,
+        urls: cleanUrls,
+      };
+      totalUrls += cleanUrls.length;
+    }
+  }
+  const categoriesCount = Object.keys(sanitizedByType).length;
+
   const cmsName = platform.cms.value || "Custom / Jamstack";
   const builderName = platform.builder.value;
   const storeStatus = store.isThirdParty
@@ -74,47 +213,54 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
       ? "None detected" 
       : `${providers.count} Provider${providers.count === 1 ? "" : "s"}`;
 
-  const baCasesText = typeof beforeAfterGallery.caseCount === "number"
-    ? `${beforeAfterGallery.caseCount} Cases`
-    : beforeAfterGallery.imageCount > 0
-      ? `${beforeAfterGallery.imageCount} Photos`
-      : "None detected";
+  // Gallery detection state (Part 1.2)
+  const hasGallery = (beforeAfterGallery.imageCount > 0) || (beforeAfterGallery.images && beforeAfterGallery.images.length > 0) || (!!beforeAfterGallery.pageUrl && beforeAfterGallery.confidence !== "unknown");
+  const baCasesText = hasGallery
+    ? typeof beforeAfterGallery.caseCount === "number"
+      ? `${beforeAfterGallery.caseCount} Cases`
+      : beforeAfterGallery.imageCount > 0
+        ? `${beforeAfterGallery.imageCount} Photos`
+        : "Gallery Identified"
+    : "None detected";
 
-  // Section: Platform & Technology Stack
+  // Interpretive lines (Part 4)
+  const ecomInterpretiveLine = getECommerceInterpretiveLine(store);
+  const galleryInterpretiveLine = getGalleryInterpretiveLine(beforeAfterGallery);
+  const providersInterpretiveLine = getProvidersInterpretiveLine(providers);
+  const offersInterpretiveLine = getOffersInterpretiveLine(sanitizedByType["offers"]);
+
+  // Section: Platform & Technology Stack (Part 2: stripped technical signal evidence strings and crawl audit card)
   const platformHtml = `
     <div style="display: flex; flex-wrap: wrap; gap: 24px; margin-bottom: 32px;">
       <div class="pdf-card pdf-avoid-break" style="width: calc(50% - 12px); box-sizing: border-box; page-break-inside: avoid; break-inside: avoid;">
         <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Content Management System</div>
         <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin: 8px 0 4px 0;">${escapeHtml(cmsName)}</div>
-        <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">Confidence: <strong>${escapeHtml(platform.cms.confidence.toUpperCase())}</strong></div>
-        ${platform.cms.evidence.length ? `<div style="font-size: 11px; color: #64748b; line-height: 1.5;">Signal: ${escapeHtml(platform.cms.evidence[0])}</div>` : ""}
+        <div style="font-size: 11px; color: #475569;">Confidence: <strong>${escapeHtml(platform.cms.confidence.toUpperCase())}</strong></div>
       </div>
       <div class="pdf-card pdf-avoid-break" style="width: calc(50% - 12px); box-sizing: border-box; page-break-inside: avoid; break-inside: avoid;">
         <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Page Builder / Framework</div>
         <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin: 8px 0 4px 0;">${escapeHtml(builderName || "Native Theme / Standard")}</div>
-        <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">Confidence: <strong>${escapeHtml(platform.builder.confidence.toUpperCase())}</strong></div>
-        ${platform.builder.evidence.length ? `<div style="font-size: 11px; color: #64748b; line-height: 1.5;">Signal: ${escapeHtml(platform.builder.evidence[0])}</div>` : ""}
+        <div style="font-size: 11px; color: #475569;">Confidence: <strong>${escapeHtml(platform.builder.confidence.toUpperCase())}</strong></div>
       </div>
-      <div class="pdf-card pdf-avoid-break" style="width: calc(50% - 12px); box-sizing: border-box; page-break-inside: avoid; break-inside: avoid;">
+      <div class="pdf-card pdf-avoid-break" style="width: 100%; box-sizing: border-box; page-break-inside: avoid; break-inside: avoid;">
         <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">E-Commerce Architecture</div>
         <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin: 8px 0 4px 0;">${escapeHtml(storeStatus)}</div>
         ${store.isThirdParty 
           ? `<div style="font-size: 11px; color: #64748b; line-height: 1.5;">${escapeHtml(store.notes || "Products are fulfilled via external partner portals rather than a native self-hosted cart.")}</div>`
           : store.hasStore 
-            ? `<div style="font-size: 11px; color: #64748b; line-height: 1.5;">Catalog: ${store.productCount} products across ${store.categoryCount} categories</div>` 
+            ? `<div style="font-size: 11px; color: #64748b; line-height: 1.5;">Catalog: ${store.productCount} product${store.productCount === 1 ? "" : "s"} in native storefront${store.categoryCount > 0 ? ` across ${store.categoryCount} categor${store.categoryCount === 1 ? "y" : "ies"}` : ""}</div>` 
             : ""}
-      </div>
-      <div class="pdf-card pdf-avoid-break" style="width: calc(50% - 12px); box-sizing: border-box; page-break-inside: avoid; break-inside: avoid;">
-        <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; color: #64748b; margin-bottom: 4px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Crawl & Sitemap Audit</div>
-        <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin: 8px 0 4px 0;">${escapeHtml(crawl.discoveredVia || "Sitemap discovery")}</div>
-        <div style="font-size: 11px; color: #64748b; line-height: 1.5;">${crawl.urlsSeen} URLs analyzed in ${(crawl.durationMs / 1000).toFixed(1)}s (${crawl.sitemaps.length} sitemaps found)</div>
+        ${store.thirdPartyIntegrations && store.thirdPartyIntegrations.length > 0
+          ? `<div style="font-size: 11px; color: #64748b; line-height: 1.5; margin-top: 2px;">Partner Brands: ${escapeHtml(store.thirdPartyIntegrations.join(", "))} (external fulfillment links)</div>`
+          : ""}
+        ${ecomInterpretiveLine ? `<div style="font-size: 11.5px; color: #334155; font-weight: 500; margin-top: 8px; border-top: 1px solid #f1f5f9; padding-top: 6px; line-height: 1.4;">${escapeHtml(ecomInterpretiveLine)}</div>` : ""}
       </div>
     </div>`;
 
   // Section: Providers & Medical Staff
   let providersHtml = "";
   if (providers.list.length > 0) {
-    providersHtml = `<div style="display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 32px;">` + providers.list.map(p => `
+    providersHtml = `<div style="display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 24px;">` + providers.list.map(p => `
       <div class="pdf-card provider-card pdf-avoid-break" style="width: calc(50% - 8px); padding-bottom: 12px; border-bottom: 1px solid #e2e8f0; box-sizing: border-box; page-break-inside: avoid; break-inside: avoid;">
         <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">
           ${escapeHtml(p.name)}${p.credentials ? `<span style="font-size: 11px; font-weight: 500; color: #475569; margin-left: 6px;">${escapeHtml(p.credentials)}</span>` : ""}
@@ -123,7 +269,7 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
       </div>`
     ).join("") + `</div>`;
   } else {
-    providersHtml = `<div class="pdf-avoid-break" style="color: #64748b; font-size: 13px; font-style: italic; margin-bottom: 32px;">No provider profiles detected.${providers.reason ? ` ${escapeHtml(providers.reason)}` : ""}</div>`;
+    providersHtml = `<div class="pdf-avoid-break" style="color: #64748b; font-size: 13px; font-style: italic; margin-bottom: 24px;">No provider profiles detected.${providers.reason ? ` ${escapeHtml(providers.reason)}` : ""}</div>`;
   }
 
   // Section: Locations & Contact Directory
@@ -146,59 +292,52 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
     locationsHtml = `<div class="pdf-avoid-break" style="color: #64748b; font-size: 13px; font-style: italic; margin-bottom: 32px;">No physical locations were extracted from the site navigation.${locations.reason ? ` Note: ${escapeHtml(locations.reason)}` : ""}</div>`;
   }
 
-  // Section: Before & After Clinical Results Gallery
+  // Section: Before & After Clinical Results Gallery (Part 1.2: single clean state, no contradictory fields)
   let baHtml = "";
-  const baEvidenceText = beforeAfterGallery.evidence.length > 0 
-    ? beforeAfterGallery.evidence.slice(0, 3).map(escapeHtml).join(" • ") 
-    : "Gallery structure identified";
-
-  baHtml += `
-    <div class="pdf-ba-banner pdf-avoid-break" style="border: 1px solid #e2e8f0; border-left: 3px solid #94a3b8; padding: 20px 24px; margin-bottom: 24px; page-break-inside: avoid; break-inside: avoid;">
-      <div style="display: flex; gap: 32px; margin-bottom: 16px;">
-        <div style="display: flex; flex-direction: column;">
-          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #64748b; margin-bottom: 4px; letter-spacing: 0.05em;">Distinct Patient Cases</div>
-          <div style="font-size: 20px; font-weight: 700; color: #0f172a; line-height: 1.2;">${typeof beforeAfterGallery.caseCount === "number" ? beforeAfterGallery.caseCount : "Detected"}</div>
-        </div>
-        <div style="display: flex; flex-direction: column;">
-          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #64748b; margin-bottom: 4px; letter-spacing: 0.05em;">Clinical Photographs</div>
-          <div style="font-size: 20px; font-weight: 700; color: #0f172a; line-height: 1.2;">${beforeAfterGallery.imageCount || 0}</div>
-        </div>
-        <div style="display: flex; flex-direction: column;">
-          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #64748b; margin-bottom: 4px; letter-spacing: 0.05em;">Detection Confidence</div>
-          <div style="font-size: 20px; font-weight: 700; color: #0f172a; line-height: 1.2;">${escapeHtml(beforeAfterGallery.confidence.toUpperCase())}</div>
-        </div>
-      </div>
-      ${beforeAfterGallery.pageUrl ? `<div style="font-size: 12px; color: #475569; margin-bottom: 8px;"><strong>Source Gallery Page:</strong> ${escapeHtml(beforeAfterGallery.pageUrl)}</div>` : ""}
-      <div style="font-size: 12px; color: #64748b; line-height: 1.5;">${baEvidenceText}</div>
-    </div>`;
-
-  if (beforeAfterGallery.images && beforeAfterGallery.images.length > 0) {
-    // Group by procedure
-    const grouped: Record<string, string[]> = {};
-    beforeAfterGallery.images.forEach(imgUrl => {
-      const proc = extractProcedureName(imgUrl);
-      if (!grouped[proc]) grouped[proc] = [];
-      grouped[proc].push(imgUrl);
-    });
-
+  if (hasGallery) {
+    const photosCount = beforeAfterGallery.imageCount || beforeAfterGallery.images?.length || 0;
     baHtml += `
-      <div style="margin-bottom: 32px;">
-        <div style="font-size: 12px; font-weight: 600; color: #0f172a; margin-bottom: 16px;">${beforeAfterGallery.images.length} image URLs found — grouped by procedure</div>` +
-        Object.entries(grouped).map(([proc, urls]) => `
-          <div class="pdf-avoid-break" style="margin-bottom: 16px; page-break-inside: avoid; break-inside: avoid;">
-            <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; margin-bottom: 8px;">${escapeHtml(proc)} <span style="font-weight: 400; color: #94a3b8; margin-left: 8px;">${urls.length} image${urls.length > 1 ? "s" : ""}</span></div>
-            <div style="display: flex; flex-direction: column; gap: 4px;">${
-              urls.map((u, i) => `<div style="font-size: 11px; font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; color: #475569; word-break: break-all;">${i + 1}. <a href="${escapeHtml(u)}" target="_blank" style="color: #475569; text-decoration: none;">${escapeHtml(u)}</a></div>`).join("")
-            }</div>
-          </div>`
-        ).join("") +
-      `</div>`;
-  } else if (beforeAfterGallery.imageCount === 0 && !beforeAfterGallery.pageUrl) {
-    baHtml += `<div class="pdf-avoid-break" style="color: #64748b; font-size: 13px; font-style: italic; margin-bottom: 32px;">No before-and-after galleries identified.</div>`;
+      <div class="pdf-ba-banner pdf-avoid-break" style="border: 1px solid #e2e8f0; border-left: 3px solid #94a3b8; padding: 18px 24px; margin-bottom: 16px; page-break-inside: avoid; break-inside: avoid;">
+        <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 6px;">
+          Gallery detected — ${photosCount} clinical photograph${photosCount === 1 ? "" : "s"}${typeof beforeAfterGallery.caseCount === "number" ? `, ${beforeAfterGallery.caseCount} patient cases` : ""}
+        </div>
+        ${beforeAfterGallery.pageUrl ? `<div style="font-size: 12px; color: #475569;"><strong>Source Gallery Page:</strong> <a href="${escapeHtml(beforeAfterGallery.pageUrl)}" target="_blank" style="color: #2563eb; text-decoration: none;">${escapeHtml(beforeAfterGallery.pageUrl)}</a></div>` : ""}
+      </div>
+      <div class="pdf-avoid-break" style="font-size: 12px; color: #334155; font-weight: 500; margin-bottom: 24px; padding: 10px 14px; background: #f8fafc; border-left: 3px solid #94a3b8; line-height: 1.5; page-break-inside: avoid; break-inside: avoid;">
+        ${escapeHtml(galleryInterpretiveLine)}
+      </div>`;
+
+    if (beforeAfterGallery.images && beforeAfterGallery.images.length > 0) {
+      const grouped: Record<string, string[]> = {};
+      beforeAfterGallery.images.forEach(imgUrl => {
+        const proc = extractProcedureName(imgUrl);
+        if (!grouped[proc]) grouped[proc] = [];
+        grouped[proc].push(imgUrl);
+      });
+
+      baHtml += `
+        <div style="margin-bottom: 32px;">
+          <div style="font-size: 12px; font-weight: 600; color: #0f172a; margin-bottom: 16px;">${beforeAfterGallery.images.length} image URLs found — grouped by procedure</div>` +
+          Object.entries(grouped).map(([proc, urls]) => `
+            <div class="pdf-avoid-break" style="margin-bottom: 16px; page-break-inside: avoid; break-inside: avoid;">
+              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; margin-bottom: 8px;">${escapeHtml(proc)} <span style="font-weight: 400; color: #94a3b8; margin-left: 8px;">${urls.length} image${urls.length > 1 ? "s" : ""}</span></div>
+              <div style="display: flex; flex-direction: column; gap: 4px;">${
+                urls.map((u, i) => `<div style="font-size: 11px; font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; color: #475569; word-break: break-all;">${i + 1}. <a href="${escapeHtml(u)}" target="_blank" style="color: #475569; text-decoration: none;">${escapeHtml(u)}</a></div>`).join("")
+              }</div>
+            </div>`
+          ).join("") +
+        `</div>`;
+    }
+  } else {
+    baHtml += `
+      <div class="pdf-avoid-break" style="color: #64748b; font-size: 13px; font-style: italic; margin-bottom: 12px;">No before-and-after gallery identified on this website.</div>
+      <div class="pdf-avoid-break" style="font-size: 12px; color: #334155; font-weight: 500; margin-bottom: 28px; padding: 10px 14px; background: #f8fafc; border-left: 3px solid #94a3b8; line-height: 1.5; page-break-inside: avoid; break-inside: avoid;">
+        ${escapeHtml(galleryInterpretiveLine)}
+      </div>`;
   }
 
-  // Section: Website Architecture & Full URL Sitemap
-  const byType = Object.entries(pages.byType)
+  // Section: Website Architecture & Full URL Sitemap (Part 1.3: "Local SEO Pages", Part 1.4: Shop storefront vs utility sub-labeling, Part 3: all URLs retained in full)
+  const byType = Object.entries(sanitizedByType)
     .filter(([_, bucket]) => bucket.urls && bucket.urls.length > 0)
     .sort((a, b) => b[1].count - a[1].count);
 
@@ -209,12 +348,24 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
       </div>`;
 
   byType.forEach(([typeKey, bucket]) => {
+    const isShop = typeKey === "shop";
+    const storefrontUrls = isShop ? bucket.urls.filter(u => !SHOP_UTILITY_RE.test(u.url)) : bucket.urls;
+    const utilityUrls = isShop ? bucket.urls.filter(u => SHOP_UTILITY_RE.test(u.url)) : [];
+
+    const countDisplay = isShop && utilityUrls.length > 0
+      ? `${storefrontUrls.length} storefront page${storefrontUrls.length === 1 ? "" : "s"} (${bucket.count} total incl. account plumbing)`
+      : `${bucket.count} page${bucket.count === 1 ? "" : "s"}`;
+
     sitemapHtml += `
       <div class="url-group pdf-avoid-break" style="page-break-inside: avoid; break-inside: avoid;">
         <div style="padding-bottom: 8px; margin-bottom: 12px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: baseline;">
           <span style="font-size: 14px; font-weight: 700; color: #0f172a;">${escapeHtml(formatLabel(typeKey))}</span>
-          <span style="font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: 0.05em; text-transform: uppercase;">${bucket.count} page${bucket.count === 1 ? "" : "s"}</span>
+          <span style="font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: 0.05em; text-transform: uppercase;">${countDisplay}</span>
         </div>
+        ${typeKey === "offers" && offersInterpretiveLine ? `
+          <div style="font-size: 11.5px; color: #334155; font-weight: 500; margin-bottom: 12px; padding: 8px 12px; background: #f8fafc; border-left: 3px solid #94a3b8; line-height: 1.4;">
+            ${escapeHtml(offersInterpretiveLine)}
+          </div>` : ""}
         <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
           <tbody>` +
           bucket.urls.map((uObj) => {
@@ -227,9 +378,21 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
             } catch {
               pathDisplay = u;
             }
+
+            let subTagHtml = "";
+            if (isShop) {
+              const isUtil = SHOP_UTILITY_RE.test(u);
+              subTagHtml = isUtil
+                ? `<span style="display: inline-block; font-size: 9px; font-weight: 600; text-transform: uppercase; color: #64748b; background: #f1f5f9; padding: 1px 6px; border-radius: 4px; margin-left: 6px; vertical-align: middle;">Utility</span>`
+                : `<span style="display: inline-block; font-size: 9px; font-weight: 600; text-transform: uppercase; color: #0f766e; background: #ccfbf1; padding: 1px 6px; border-radius: 4px; margin-left: 6px; vertical-align: middle;">Storefront</span>`;
+            }
+
             return `
             <tr style="border-bottom: 1px solid #f1f5f9; page-break-inside: avoid; break-inside: avoid;">
-              <td style="padding: 10px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; color: #0f172a; font-weight: 600; width: 40%; word-break: break-all;" title="${escapeHtml(u)}">${escapeHtml(pathDisplay)}</td>
+              <td style="padding: 10px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; color: #0f172a; font-weight: 600; width: 40%; word-break: break-all;" title="${escapeHtml(u)}">
+                ${escapeHtml(pathDisplay)}
+                ${subTagHtml}
+              </td>
               <td style="padding: 10px 0 10px 16px; width: 60%; word-break: break-all;">
                 <a href="${escapeHtml(u)}" target="_blank" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10.5px; color: #475569; text-decoration: none;">${escapeHtml(u)}</a>
               </td>
@@ -241,7 +404,7 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
   });
   sitemapHtml += `</div>`;
 
-  // Warnings
+  // Warnings (filtered of technical sitemap noise)
   const visibleWarnings = crawl.warnings.filter(w => !/sitemap/i.test(w));
   const warningsHtml = visibleWarnings.length > 0
     ? `<div class="pdf-warning-box pdf-avoid-break" style="border: 1px solid #e2e8f0; border-left: 3px solid #94a3b8; padding: 20px 24px; margin-top: 32px; page-break-inside: avoid; break-inside: avoid;">
@@ -261,9 +424,8 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
     <h1 style="font-size: 28px; font-weight: 800; line-height: 1.25; margin: 0 0 12px 0; color: #0f172a; letter-spacing: -0.02em; word-break: break-all;">${escapeHtml(url)}</h1>
     <p style="font-size: 14px; color: #475569; margin: 0 0 24px 0; line-height: 1.6;">Deep architectural analysis, clinical taxonomy, and digital footprint audit</p>
     
-    <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px; padding-top: 24px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #475569;">
+    <div style="display: flex; flex-wrap: wrap; gap: 24px; margin-top: 24px; padding-top: 24px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #475569;">
       <div><strong style="color: #0f172a;">Analyzed:</strong> ${escapeHtml(generatedAt)}</div>
-      <div><strong style="color: #0f172a;">Discovery:</strong> ${escapeHtml(crawl.discoveredVia || "Verified")}</div>
       <div><strong style="color: #0f172a;">Total Pages:</strong> ${totalUrls}</div>
     </div>
   </header>
@@ -289,7 +451,7 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
     <div class="kpi-card" style="flex: 1 1 0; min-width: 0; padding: 0 16px; border-left: 1px solid #e2e8f0; box-sizing: border-box;">
       <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; color: #64748b; margin-bottom: 8px;">E-Commerce</div>
       <div style="font-size: 18px; font-weight: 700; color: #0f172a; line-height: 1.2; margin-bottom: 4px;">${store.isThirdParty ? "Third-Party" : store.hasStore ? "Active" : store.platform ? "Installed" : "None"}</div>
-      <div style="font-size: 12px; color: #475569;">${store.isThirdParty ? (store.thirdPartyIntegrations?.join(", ") || "External Portal") : store.productCount > 0 ? `${store.productCount} products` : "No products found"}</div>
+      <div style="font-size: 12px; color: #475569;">${store.isThirdParty ? (store.thirdPartyIntegrations?.join(", ") || "External Portal") : store.productCount > 0 ? `${store.productCount} product${store.productCount === 1 ? "" : "s"}` : "No products found"}</div>
     </div>
     <div class="kpi-card" style="flex: 1 1 0; min-width: 0; padding: 0 16px; border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0; box-sizing: border-box;">
       <div style="font-size: 10px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; color: #64748b; margin-bottom: 8px;">Medical Staff</div>
@@ -314,6 +476,7 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
       <span style="font-size: 12px; color: #64748b;">${providers.list.length} profiles</span>
     </div>
     ${providersHtml}
+    ${providersInterpretiveLine ? `<div class="pdf-avoid-break" style="font-size: 12px; color: #334155; font-weight: 500; margin-bottom: 32px; padding: 10px 14px; background: #f8fafc; border-left: 3px solid #94a3b8; line-height: 1.5; page-break-inside: avoid; break-inside: avoid;">${escapeHtml(providersInterpretiveLine)}</div>` : ""}
   </div>
 
   <!-- Section 3: Clinic Locations & Physical Footprint -->
@@ -348,8 +511,8 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
 
   <!-- Provenance Footer -->
   <div class="report-footer pdf-avoid-break" style="margin-top: 36px; padding-top: 16px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; font-size: 10.5px; color: #94a3b8; page-break-inside: avoid; break-inside: avoid;">
-    <div>Generated by WebAnalyzer Enterprise &bull; Discovered via ${escapeHtml(crawl.discoveredVia || "sitemaps")}</div>
-    <div>Confidential Research Report &bull; All URLs are interactive and clickable</div>
+    <div>Generated by WebAnalyzer &bull; Confidential Research Audit</div>
+    <div>All URLs are interactive and clickable</div>
   </div>
 
 </div>`;

@@ -1,5 +1,5 @@
 import { crawlSite, type CrawlResult } from "./crawl.js";
-import { detectPlatform, detectStore, type PlatformResult, type StoreResult } from "./platform.js";
+import { detectPlatform, detectStore, fetchStoreProducts, type PlatformResult, type StoreResult } from "./platform.js";
 import { classifyPages, type TaxonomyResult } from "./classify.js";
 import { detectProviders, type ProvidersResult } from "./providers.js";
 import { detectLocations, type LocationsResult } from "./locations.js";
@@ -76,21 +76,23 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
     images: [],
   });
 
-  // Check for shop page to detect any third-party skincare / product store integrations
   const shopPage = crawl.pages.find((p) => /^\/(shop|store)\/?$/i.test(p.path)) ||
     (crawl.pages.some((p) => /\/(shop|store)\//i.test(p.path)) ? { url: crawl.origin + "/shop/", path: "/shop/" } : null);
 
   const shopHtmlPromise = shopPage ? fetchHtml(shopPage.url, 25000).catch(() => "") : Promise.resolve("");
+  const apiProductsPromise = fetchStoreProducts(crawl.origin).catch(() => []);
 
-  const [platform, providers, locations, beforeAfterGallery, shopHtml] = await Promise.all([
+  const [platform, providers, locations, beforeAfterGallery, shopHtml, apiProducts] = await Promise.all([
     platformPromise,
     providersPromise,
     locationsPromise,
     beforeAfterPromise,
     shopHtmlPromise,
+    apiProductsPromise,
   ]);
 
-  const store = detectStore(crawl.counts, platform.ecommerce, shopHtml);
+  const productUrls = crawl.pages.filter((p) => p.source === "product").map((p) => p.url);
+  const store = detectStore(crawl.counts, platform.ecommerce, shopHtml, productUrls, apiProducts);
 
   // Surface taxonomy's own warnings (internal timeouts on its slow steps) and
   // the outer-safety-net "reason" (if THAT fired instead) alongside crawl's —
