@@ -35,7 +35,7 @@ function storePhrase(result: AnalyzeResult): string {
       : "";
     return `third-party store integration${list}`;
   }
-  if (store.hasStore) return `store (${store.platform ?? "unknown platform"}, ${store.productCount} products)`;
+  if (store.hasStore) return `store (${store.platform ?? "unknown platform"}, ${store.productCount} product${store.productCount === 1 ? "" : "s"})`;
   return "no active store";
 }
 
@@ -74,7 +74,7 @@ export function toClipboardText(result: AnalyzeResult): string {
       store.isThirdParty
         ? `Third-party integration (${store.thirdPartyIntegrations?.join(", ") || "external portal"})${store.notes ? ` — ${store.notes}` : ""}`
         : store.hasStore
-        ? `Yes — ${store.productCount} products, ${store.categoryCount} categories`
+        ? `Yes — ${store.productCount} product${store.productCount === 1 ? "" : "s"}, ${store.categoryCount} categor${store.categoryCount === 1 ? "y" : "ies"}`
         : "No active store"
     }`
   );
@@ -86,7 +86,7 @@ export function toClipboardText(result: AnalyzeResult): string {
   for (const [type, bucket] of byType) {
     const baNote =
       type === "beforeAfter" && typeof beforeAfterGallery.caseCount === "number"
-        ? ` (${beforeAfterGallery.caseCount} distinct cases, ${beforeAfterGallery.imageCount} images)`
+        ? ` (${beforeAfterGallery.caseCount} distinct case${beforeAfterGallery.caseCount === 1 ? "" : "s"})`
         : "";
     lines.push(`  - ${type}: ${bucket.count}${baNote}`);
   }

@@ -22,7 +22,7 @@
 const UA = "Mozilla/5.0 (compatible; G99WebAnalyzer/1.0; +https://github.com/devsharmagit/web-analyzer)";
 const SITEMAP_CANDIDATES = ["/sitemap.xml", "/wp-sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml"];
 const MAX_CHILD_SITEMAPS = 25;
-const ASSET_RE = /\.(xml|kml|jpe?g|png|webp|gif|svg|pdf|css|js|ico|zip|mp4|webm|json|webmanifest|md|txt|csv)(\?|#|$)/i;
+export const ASSET_RE = /\.(xml|kml|jpe?g|png|webp|gif|svg|pdf|css|js|ico|zip|mp4|webm|json|webmanifest|md|txt|csv|woff2?|ttf|otf|eot|fon|ttc|mp3|wav|ogg|m4a|avi|mov)(?:[?#/]|$)/i;
 // Technical/infrastructure paths that a homepage's own <a href> links
 // routinely include (RSS feed links, well-known service-discovery endpoints,
 // REST API roots, login/XML-RPC) — never actual content a salesperson would
@@ -176,8 +176,8 @@ export function extractNavCategories(html: string, origin: string): Map<string, 
       const u = new URL(urlStr, origin);
       if (u.origin !== origin) return null;
       let p = u.pathname.replace(/\/+/g, "/");
-      if (p !== "/" && !p.endsWith("/") && !ASSET_RE.test(p)) p += "/";
       if (ASSET_RE.test(p) || NON_PAGE_PATH_RE.test(p)) return null;
+      if (p !== "/" && !p.endsWith("/")) p += "/";
       return p;
     } catch {
       return null;
@@ -287,8 +287,8 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     // from the homepage-link supplement — collapse to a single page instead
     // of double-counting. WordPress permalinks canonically end in "/".
     let path = x.pathname.replace(/\/{2,}/g, "/");
-    if (path !== "/" && !path.endsWith("/") && !ASSET_RE.test(path)) path += "/";
     if (ASSET_RE.test(path) || NON_PAGE_PATH_RE.test(path) || DATE_ARCHIVE_PATH_RE.test(path)) return;
+    if (path !== "/" && !path.endsWith("/")) path += "/";
     let row = found.get(path);
     if (!row) {
       row = { path, url: origin + path, sources: new Set() };
@@ -362,7 +362,8 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     } catch {
       return;
     }
-    if (!found.has(path)) add(rawUrl, source);
+    if (ASSET_RE.test(path) || NON_PAGE_PATH_RE.test(path) || DATE_ARCHIVE_PATH_RE.test(path)) return;
+    if (!found.has(path) && !found.has(path.endsWith("/") ? path : path + "/")) add(rawUrl, source);
   };
 
   console.log(`crawlSite: Fetching homepage links for ${origin}...`);
@@ -379,6 +380,7 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   // Extract navigation menu hierarchy signals from homepage HTML
   const navCategories = extractNavCategories(homeHtml, origin);
   for (const [p, cat] of navCategories.entries()) {
+    if (ASSET_RE.test(p) || NON_PAGE_PATH_RE.test(p)) continue;
     let row = found.get(p);
     if (!row) {
       row = { path: p, url: origin + p, sources: new Set() };

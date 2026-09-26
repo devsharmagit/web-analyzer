@@ -209,6 +209,14 @@ Located in `server/src/analyzer/platform.ts`.
   - Patient Financing Portals: *Cherry Financing*, *CareCredit*, *PatientFi*, *Alphaeon*.
 - Flags `isThirdParty: true`, lists detected partner portals, and generates an explanatory note when products are fulfilled externally rather than via a native cart.
 
+#### Product & Category Derivation (`detectStore` & `fetchStoreProducts`)
+- **Single-Page Curated Storefronts**:
+  - `productCount`: Extracted from the customer-visible storefront HTML (`/shop/`) and canonicalized by base slug via `canonicalizeProductSlug`, stripping size, volume, weight, pack, count, and denomination suffixes (e.g. multiple gift card values collapse into 1 product).
+  - `categoryCount`: Genuinely derived from the distinct set of real category names attached to the visible/collapsed product list using the WooCommerce Store API (`/wp-json/wc/store/v1/products`) or WP REST API (`/wp-json/wp/v2/product`). Orphaned products or unlinked categories in the CMS backend are excluded.
+- **Multi-Page Catalogs & Pagination Fallback Tradeoff**:
+  - When pagination (`/page/2/`, `woocommerce-pagination`) or category archives (`/product-category/`) are detected on `/shop/`, reading page 1 alone would undercount the catalog. In this case, `detectStore` falls back to the full discovered catalog across XML sitemaps (`product-sitemap.xml`) and raw API counts (`counts.product`, `apiProducts`).
+  - **Known & Accepted Limitation**: For paginated stores, the fallback reverts to sitemap and raw API counts, which can re-include orphaned, unlinked, or legacy products that remain published in the WordPress database but are no longer surfaced in customer-facing storefront navigation. This is an intentional architectural trade-off to ensure large, genuine multi-page catalogs (e.g., 50+ items) are not artificially truncated to page 1's count.
+
 ---
 
 ## Phase 4: Medical Staff & Physical Footprint Extraction

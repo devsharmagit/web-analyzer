@@ -198,13 +198,238 @@ export function detectThirdPartyStore(html: string): string[] {
   return found;
 }
 
+export function canonicalizeProductSlug(slug: string): string {
+  const s = slug.toLowerCase().replace(/\/+$/, "");
+  // Collapse gift card variations: gift-card-100, inspire-gift-card-500, etc.
+  // Preserves brand/prefix (e.g. "inspire-gift-card" vs "medspa-gift-card"), collapsing only the denomination suffix.
+  const giftCardMatch = s.match(/^((?:[a-z0-9]+[-_])*(?:gift[-_]?(?:card|certificate)s?))([-_]\d+)?$/i);
+  if (giftCardMatch) {
+    return giftCardMatch[1];
+  }
+  // Collapse size/volume/pack variations: -50ml, -100ml, -small, -large, -30ct, -travel-size
+  // Extracts capturing group 1 (the product base slug) before the variation delimiter.
+  const variationMatch = s.match(/^(.+?)[-_](?:\d+(?:\.\d+)?(?:oz|fl[-_]?oz|ml|g|mg|kg|lb|lbs|ct|count|pk|pack|capsules|tablets|gummies)|small|medium|large|xl|xxl|travel[-_]?size|full[-_]?size|mini|sample)$/i);
+  if (variationMatch) return variationMatch[1];
+  return s;
+}
+
+export function collapseProductUrls(urls: string[]): Set<string> {
+  const unique = new Set<string>();
+  for (const u of urls) {
+    try {
+      const parsed = new URL(u);
+      const slug = parsed.pathname.split("/").filter(Boolean).pop() || "";
+      unique.add(canonicalizeProductSlug(slug));
+    } catch {
+      const slug = u.split("/").filter(Boolean).pop() || "";
+      unique.add(canonicalizeProductSlug(slug));
+    }
+  }
+  return unique;
+}
+
+export interface ApiProduct {
+  id?: number;
+  slug: string;
+  name: string;
+  permalink?: string;
+  categories: string[];
+}
+
+export function extractSlugFromUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname.split("/").filter(Boolean).pop() || "";
+  } catch {
+    return url.split("/").filter(Boolean).pop() || "";
+  }
+}
+
+/**
+ * Genuinely derive the set of distinct category names attached to a set of products.
+ * If filterUrls is provided, only category names of matching products are included.
+ */
+export function deriveCategoriesFromProducts(
+  products: ApiProduct[],
+  filterUrls?: string[]
+): Set<string> {
+  let targetProducts = products;
+  if (filterUrls && filterUrls.length > 0) {
+    const targetSlugs = new Set(filterUrls.map((u) => extractSlugFromUrl(u).toLowerCase()));
+    targetProducts = products.filter(
+      (p) =>
+        targetSlugs.has(p.slug.toLowerCase()) ||
+        (p.permalink && filterUrls.some((u) => u.replace(/\/+$/, "") === p.permalink?.replace(/\/+$/, "")))
+    );
+  }
+  const categories = new Set<string>();
+  for (const p of targetProducts) {
+    for (const cat of p.categories) {
+      if (cat && typeof cat === "string") {
+        categories.add(cat.trim());
+      }
+    }
+  }
+  return categories;
+}
+
+/**
+ * Fetch products and their real categories from WooCommerce Store API or WP REST API.
+ */
+export async function fetchStoreProducts(origin: string): Promise<ApiProduct[]> {
+  try {
+    // 1. Try WooCommerce Store API (standard in modern WooCommerce)
+    const res = await fetchWithFallback(`${origin}/wp-json/wc/store/v1/products?per_page=100`, {
+      timeoutMs: 10000,
+      headers: { "User-Agent": UA },
+    });
+    if (res.ok && res.html) {
+      const data = JSON.parse(res.html);
+      if (Array.isArray(data) && data.length > 0) {
+        return data.map((item: any) => ({
+          id: item.id,
+          slug: (item.slug || "").toLowerCase(),
+          name: item.name || "",
+          permalink: item.permalink || "",
+          categories: Array.isArray(item.categories)
+            ? item.categories.map((c: any) => (c.name || c.slug || "").trim()).filter(Boolean)
+            : [],
+        }));
+      }
+    }
+  } catch {
+    /* fallback to wp/v2 */
+  }
+
+  try {
+    // 2. Fall back to WP REST API /wp/v2/product + /wp/v2/product_cat
+    const [prodRes, catRes] = await Promise.all([
+      fetchWithFallback(`${origin}/wp-json/wp/v2/product?per_page=100`, {
+        timeoutMs: 10000,
+        headers: { "User-Agent": UA },
+      }),
+      fetchWithFallback(`${origin}/wp-json/wp/v2/product_cat?per_page=100`, {
+        timeoutMs: 10000,
+        headers: { "User-Agent": UA },
+      }),
+    ]);
+
+    if (prodRes.ok && prodRes.html) {
+      const prods = JSON.parse(prodRes.html);
+      const catMap = new Map<number, string>();
+      if (catRes.ok && catRes.html) {
+        const cats = JSON.parse(catRes.html);
+        if (Array.isArray(cats)) {
+          for (const c of cats) {
+            if (c.id && c.name) catMap.set(c.id, c.name.trim());
+          }
+        }
+      }
+
+      if (Array.isArray(prods) && prods.length > 0) {
+        return prods.map((item: any) => ({
+          id: item.id,
+          slug: (item.slug || "").toLowerCase(),
+          name: item.title?.rendered || item.name || "",
+          permalink: item.link || "",
+          categories: Array.isArray(item.product_cat)
+            ? item.product_cat.map((id: number) => catMap.get(id) || "").filter(Boolean)
+            : [],
+        }));
+      }
+    }
+  } catch {
+    /* no api products available */
+  }
+
+  return [];
+}
+
 export function detectStore(
   counts: Record<string, number>,
   ecommerce: Detection,
-  shopHtml?: string
+  shopHtml?: string,
+  productUrls?: string[],
+  apiProducts: ApiProduct[] = []
 ): StoreResult {
-  const productCount = counts.product || 0;
-  const categoryCount = counts.product_cat || 0;
+  const rawCategoryCount = counts.product_cat || 0;
+
+  // Extract products and categories directly from the customer-visible shop storefront if available
+  let storefrontProductUrls: string[] = [];
+  let shopCategoryUrls: string[] = [];
+  let hasPaginationOrCategories = false;
+
+  if (shopHtml) {
+    const shopMatches = [...shopHtml.matchAll(/href=["'](https?:\/\/[^"']*\/product\/[^"'?#]+)\/?["']/gi)];
+    storefrontProductUrls = [...new Set(shopMatches.map((m) => m[1].replace(/\/+$/, "")))];
+
+    const catMatches = [...shopHtml.matchAll(/href=["'](https?:\/\/[^"']*\/product-category\/[^"'?#]+)\/?["']/gi)];
+    shopCategoryUrls = [...new Set(catMatches.map((m) => m[1].replace(/\/+$/, "")))];
+
+    hasPaginationOrCategories =
+      /page\/\d+|next page-numbers|woocommerce-pagination/i.test(shopHtml) ||
+      shopCategoryUrls.length > 0;
+  }
+
+  let productCount = 0;
+  let categoryCount = 0;
+
+  if (storefrontProductUrls.length > 0 && !hasPaginationOrCategories) {
+    // Single landing storefront (e.g. Elementor gift cards page) — exact customer-visible catalog
+    const collapsed = collapseProductUrls(storefrontProductUrls);
+    productCount = collapsed.size;
+
+    // Derive categoryCount from the distinct set of real category names
+    // attached to the SAME visible/collapsed product list used for productCount.
+    if (apiProducts.length > 0) {
+      categoryCount = deriveCategoriesFromProducts(apiProducts, storefrontProductUrls).size;
+    } else if (shopCategoryUrls.length > 0) {
+      categoryCount = shopCategoryUrls.length;
+    } else {
+      categoryCount = rawCategoryCount;
+    }
+  } else if (hasPaginationOrCategories) {
+    // Multi-page store with pagination or category archive links:
+    // Storefront page 1 does NOT contain the full catalog. Fall back to all discovered products
+    // from sitemaps/crawling, or the raw product count from sitemap/API.
+    if (productUrls && productUrls.length > 0) {
+      productCount = collapseProductUrls(productUrls).size;
+    }
+    if (counts.product && counts.product > productCount) {
+      productCount = counts.product;
+    }
+
+    // Derive categoryCount from real category data across the fallback product set
+    if (apiProducts.length > 0) {
+      categoryCount = deriveCategoriesFromProducts(apiProducts).size;
+    } else if (shopCategoryUrls.length > 0) {
+      categoryCount = shopCategoryUrls.length;
+    } else {
+      categoryCount = rawCategoryCount;
+    }
+  } else if (productUrls && productUrls.length > 0) {
+    productCount = collapseProductUrls(productUrls).size;
+    if (apiProducts.length > 0) {
+      categoryCount = deriveCategoriesFromProducts(apiProducts, productUrls).size;
+    } else {
+      categoryCount = rawCategoryCount || shopCategoryUrls.length;
+    }
+  } else if (storefrontProductUrls.length > 0) {
+    productCount = collapseProductUrls(storefrontProductUrls).size;
+    if (apiProducts.length > 0) {
+      categoryCount = deriveCategoriesFromProducts(apiProducts, storefrontProductUrls).size;
+    } else {
+      categoryCount = shopCategoryUrls.length || rawCategoryCount;
+    }
+  } else {
+    productCount = counts.product || 0;
+    if (apiProducts.length > 0) {
+      categoryCount = deriveCategoriesFromProducts(apiProducts).size;
+    } else {
+      categoryCount = rawCategoryCount;
+    }
+  }
+
   const hasNativeStore = productCount > 0 || categoryCount > 0;
 
   const thirdPartyIntegrations = shopHtml ? detectThirdPartyStore(shopHtml) : [];
