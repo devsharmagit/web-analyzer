@@ -296,10 +296,14 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
   let baHtml = "";
   if (hasGallery) {
     const photosCount = beforeAfterGallery.imageCount || beforeAfterGallery.images?.length || 0;
+    const galleryHeadline = typeof beforeAfterGallery.caseCount === "number"
+      ? `${beforeAfterGallery.caseCount} distinct patient case${beforeAfterGallery.caseCount === 1 ? "" : "s"}`
+      : `${photosCount} clinical photograph${photosCount === 1 ? "" : "s"}`;
+
     baHtml += `
       <div class="pdf-ba-banner pdf-avoid-break" style="border: 1px solid #e2e8f0; border-left: 3px solid #94a3b8; padding: 18px 24px; margin-bottom: 16px; page-break-inside: avoid; break-inside: avoid;">
         <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 6px;">
-          Gallery detected — ${photosCount} clinical photograph${photosCount === 1 ? "" : "s"}${typeof beforeAfterGallery.caseCount === "number" ? `, ${beforeAfterGallery.caseCount} patient cases` : ""}
+          Gallery detected — ${galleryHeadline}
         </div>
         ${beforeAfterGallery.pageUrl ? `<div style="font-size: 12px; color: #475569;"><strong>Source Gallery Page:</strong> <a href="${escapeHtml(beforeAfterGallery.pageUrl)}" target="_blank" style="color: #2563eb; text-decoration: none;">${escapeHtml(beforeAfterGallery.pageUrl)}</a></div>` : ""}
       </div>
@@ -317,7 +321,7 @@ export function generateReportHtml(result: AnalyzeResult, options?: { standalone
 
       baHtml += `
         <div style="margin-bottom: 32px;">
-          <div style="font-size: 12px; font-weight: 600; color: #0f172a; margin-bottom: 16px;">${beforeAfterGallery.images.length} image URLs found — grouped by procedure</div>` +
+          <div style="font-size: 12px; font-weight: 600; color: #0f172a; margin-bottom: 16px;">Gallery images — grouped by procedure</div>` +
           Object.entries(grouped).map(([proc, urls]) => `
             <div class="pdf-avoid-break" style="margin-bottom: 16px; page-break-inside: avoid; break-inside: avoid;">
               <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; margin-bottom: 8px;">${escapeHtml(proc)} <span style="font-weight: 400; color: #94a3b8; margin-left: 8px;">${urls.length} image${urls.length > 1 ? "s" : ""}</span></div>
