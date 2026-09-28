@@ -14,7 +14,7 @@ const MAX_CONTENT_FETCH = 40;
 
 export type SectionKey =
   | "core" | "locations" | "forms" | "care" | "service" | "condition"
-  | "beforeAfter" | "proof" | "offers" | "shop" | "blog" | "legal"
+  | "beforeAfter" | "testimonial" | "proof" | "offers" | "shop" | "blog" | "legal"
   | "careers" | "media" | "other" | "uncertain" | "events" | "education";
 
 interface Section {
@@ -73,7 +73,7 @@ const SECTIONS: Section[] = [
   // used to win first — confirmed live on ruma.com.
   { key: "offers", label: "Offers, memberships & financing", scope: "recommended",
     test: (p) => /(special|offer|promo|vip|membership|payment-plan|payment|financ|cherry|carecredit|patientfi|alphaeon|gift|package|bank|discount|affiliate)/i.test(p) },
-  { key: "proof", label: "Proof & trust", scope: "recommended",
+  { key: "testimonial", label: "Testimonials & reviews", scope: "recommended",
     test: (p) => /(review|testimonial|gallery|results|partner)/i.test(p) },
   { key: "shop", label: "Store & products", scope: "out-of-scope",
     test: (p, src) => src === "product" || /^\/(shop|store|product|cart|checkout|my-account)/i.test(p) },
@@ -167,7 +167,7 @@ async function withInternalTimeout<T>(promise: Promise<T>, ms: number, fallback:
 // (source === "portfolio") but matched neither service nor condition vocabulary
 // are genuinely ambiguous — batch them to Gemini in one call rather than
 // guessing or one-call-per-URL.
-type AdjudicatedCategory = "service" | "condition" | "blog" | "core" | "offers" | "forms" | "legal" | "proof" | "locations" | "care" | "other";
+type AdjudicatedCategory = "service" | "condition" | "blog" | "core" | "offers" | "forms" | "legal" | "testimonial" | "proof" | "locations" | "care" | "other";
 
 async function adjudicateUncertain(
   candidates: AnalyzedPage[],
@@ -193,7 +193,7 @@ async function adjudicateUncertain(
 - "offers": pricing pages, memberships, specials, financing, payment plans
 - "forms": booking, consultation forms, quizzes
 - "legal": privacy policy, terms, HIPAA, accessibility
-- "proof": reviews, testimonials, before-and-after galleries
+- "testimonial": reviews, testimonials, social proof
 - "other": anything that doesn't fit the above
 
 IMPORTANT RULES:
@@ -219,8 +219,11 @@ ${list}`;
   try {
     const text = await geminiCall([{ text: prompt }], { temperature: 0, maxOutputTokens: 4000 });
     for (const line of text.split("\n")) {
-      const m = line.match(/(?:^|[-*]\s*)(\S+?)(?:\s*::.*?)?\s*=>\s*(service|condition|blog|core|offers|forms|legal|proof|locations|care|other)/i);
-      if (m) result.set(m[1]!, m[2]!.toLowerCase() as AdjudicatedCategory);
+      const m = line.match(/(?:^|[-*]\s*)(\S+?)(?:\s*::.*?)?\s*=>\s*(service|condition|blog|core|offers|forms|legal|testimonial|proof|locations|care|other)/i);
+      if (m) {
+        const cat = m[2]!.toLowerCase();
+        result.set(m[1]!, (cat === "proof" ? "testimonial" : cat) as AdjudicatedCategory);
+      }
     }
   } catch {
     // AI adjudication is best-effort; leftover candidates stay in "uncertain".
@@ -312,7 +315,8 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
          push("other", { url: p.url, method: "fallback", confidence: 0, reason: "Passed through pipeline unrecognized" });
        }
     } else {
-       push(result.category, { url: p.url, method: result.method, confidence: result.confidence, reason: result.reason });
+       const cat = result.category === "proof" ? "testimonial" : result.category;
+       push(cat, { url: p.url, method: result.method, confidence: result.confidence, reason: result.reason });
     }
   }
 

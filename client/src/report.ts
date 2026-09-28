@@ -17,6 +17,7 @@ const SHOP_UTILITY_RE = /\/(cart|checkout|my-account|order-tracking|wishlist|acc
 function formatLabel(str: string): string {
   if (!str) return "Clinical Gallery";
   if (str.toLowerCase() === "locations") return "Local SEO Pages";
+  if (str.toLowerCase() === "proof" || str.toLowerCase() === "testimonial") return "Testimonial";
   const words = str.replace(/[-_]+/g, " ").trim().split(" ");
   return words.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
 }

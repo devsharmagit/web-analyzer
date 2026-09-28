@@ -88,7 +88,8 @@ export function toClipboardText(result: AnalyzeResult): string {
       type === "beforeAfter" && typeof beforeAfterGallery.caseCount === "number"
         ? ` (${beforeAfterGallery.caseCount} distinct case${beforeAfterGallery.caseCount === 1 ? "" : "s"})`
         : "";
-    lines.push(`  - ${type}: ${bucket.count}${baNote}`);
+    const displayType = type === "proof" ? "testimonial" : type;
+    lines.push(`  - ${displayType}: ${bucket.count}${baNote}`);
   }
   lines.push("");
 

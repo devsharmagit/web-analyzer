@@ -435,7 +435,7 @@ function TabPages({ pages, beforeAfterGallery }: { pages: AnalyzeResult["pages"]
             <div key={type} className="flex flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] shadow-sm transition hover:border-[var(--color-border)]/80">
               <div className="flex items-center justify-between border-b border-[var(--color-border)]/50 bg-[var(--color-bg)]/30 px-5 py-4">
                 <span className="font-semibold capitalize text-[var(--color-text)]">
-                  {type === "locations" ? "Local SEO Pages" : type}
+                  {type === "locations" ? "Local SEO Pages" : type === "proof" ? "Testimonial" : type}
                 </span>
                 <span className="rounded-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2.5 py-0.5 text-xs font-semibold">{bucket.count}</span>
               </div>
