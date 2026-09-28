@@ -37,6 +37,15 @@ app.post("/api/scraperapi/reset-credits", (_req, res) => {
   res.json({ ok: true, sessionCreditsUsed: 0 });
 });
 
+app.get("/api/webshare/credits", (_req, res) => {
+  res.json({ sessionRequestsUsed: getSessionCredits(), sessionCreditsUsed: getSessionCredits() });
+});
+
+app.post("/api/webshare/reset-credits", (_req, res) => {
+  resetSessionCredits();
+  res.json({ ok: true, sessionRequestsUsed: 0, sessionCreditsUsed: 0 });
+});
+
 // Admin endpoint to log a misclassification
 app.post("/api/corrections", async (req, res) => {
   const { urlPattern, matchedField, wrongCategory, correctCategory } = req.body;

@@ -22,6 +22,7 @@ export interface AnalyzeResult {
   beforeAfterGallery: BeforeAfterResult;
   crawl: Pick<CrawlResult, "discoveredVia" | "sitemaps" | "urlsSeen" | "durationMs" | "warnings"> & {
     scraperApiCreditsUsed?: number;
+    proxyRequestsUsed?: number;
   };
 }
 
@@ -142,6 +143,7 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
       durationMs: crawl.durationMs,
       warnings: allWarnings,
       scraperApiCreditsUsed: getSessionCredits(),
+      proxyRequestsUsed: getSessionCredits(),
     },
   };
 }

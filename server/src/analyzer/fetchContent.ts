@@ -63,7 +63,7 @@ export async function fetchContentSignals(
   if (!urls.length) return results;
 
   // URLs that failed during Crawlee (HTTP/2 stream refused, WAF block, connection drop)
-  // queued for resilient fallback (Direct Node fetch first -> ScraperAPI plain fallback).
+  // queued for resilient fallback (Direct Node fetch first -> Webshare rotating proxy fallback).
   const failedUrls: string[] = [];
 
   await runIsolatedCrawler(urls, {
@@ -101,7 +101,7 @@ export async function fetchContentSignals(
   });
 
   // Resilient fallback pass — runs after Crawlee finishes for any failed URLs.
-  // Direct fetch (Node HTTP/1.1) is tried first; on WAF/bot-block, falls back to ScraperAPI.
+  // Direct fetch (Node HTTP/1.1) is tried first; on WAF/bot-block, falls back to Webshare proxy.
   if (failedUrls.length > 0) {
     await Promise.all(
       failedUrls.map(async (url) => {
