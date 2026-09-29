@@ -1,5 +1,5 @@
 import { crawlSite, type CrawlResult } from "./crawl.js";
-import { detectPlatform, detectStore, fetchStoreProducts, type PlatformResult, type StoreResult } from "./platform.js";
+import { detectPlatform, detectStore, fetchStoreProducts, detectExternalStore, type PlatformResult, type StoreResult } from "./platform.js";
 import { classifyPages, type TaxonomyResult } from "./classify.js";
 import { detectProviders, type ProvidersResult } from "./providers.js";
 import { detectLocations, type LocationsResult } from "./locations.js";
@@ -93,7 +93,35 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
   ]);
 
   const productUrls = crawl.pages.filter((p) => p.source === "product").map((p) => p.url);
-  const store = detectStore(crawl.counts, platform.ecommerce, shopHtml, productUrls, apiProducts);
+  let store = detectStore(crawl.counts, platform.ecommerce, shopHtml, productUrls, apiProducts);
+
+  // If no native store was detected, check for a cross-domain external store
+  // (e.g. a Shopify store on a different subdomain linked from the navbar).
+  // This is the fix for theagelessclinic.com: their navbar links to
+  // agelessxpress.com → ageless.shop (Shopify), which the same-origin crawl
+  // silently ignored, producing a misleading "No store detected" result.
+  if (!store.hasStore && crawl.externalStoreLinks.length > 0) {
+    try {
+      const externalStoreUrls = crawl.externalStoreLinks.map((l) => l.url);
+      const externalStore = await withTimeout(
+        detectExternalStore(externalStoreUrls),
+        12000,
+        null
+      );
+      if (externalStore) {
+        store = {
+          ...store,
+          hasStore: true,
+          isThirdParty: true,
+          platform: externalStore.platform,
+          thirdPartyIntegrations: [externalStore.platform],
+          notes: `External ${externalStore.platform} store detected at ${externalStore.finalUrl} (linked from homepage navbar as "${crawl.externalStoreLinks[0]?.anchorText || "shop"}")`,
+        };
+      }
+    } catch {
+      /* external store detection failure is non-fatal */
+    }
+  }
 
   // Surface taxonomy's own warnings (internal timeouts on its slow steps) and
   // the outer-safety-net "reason" (if THAT fired instead) alongside crawl's —

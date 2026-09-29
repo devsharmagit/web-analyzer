@@ -41,8 +41,14 @@ function storePhrase(result: AnalyzeResult): string {
 
 function platformPhrase(result: AnalyzeResult): string {
   const { cms, builder } = result.platform;
+  // "Custom" by itself is technically known info but not very specific for the summary.
+  // Include it only when there's a descriptor (e.g. "Custom (Bootstrap + PHP)"),
+  // or always include it since it confirms we investigated and it's genuinely custom.
   const parts = [cms.value, builder.value].filter(Boolean);
-  return parts.length ? parts.join(" + ") : "platform unknown";
+  if (parts.length) return parts.join(" + ");
+  // Fallback: should not reach here since detectCustomPlatform always returns a value,
+  // but guard just in case.
+  return "platform unknown";
 }
 
 /** One line: "WordPress + Elementor · 36 services · 170 blog posts · 12 providers · 1 location · no active store" */

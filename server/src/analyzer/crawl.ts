@@ -20,7 +20,19 @@
 // posture this tool doesn't take. See the 403-detection warning below for
 // how a real block like this is now surfaced instead.
 const UA = "Mozilla/5.0 (compatible; G99WebAnalyzer/1.0; +https://github.com/devsharmagit/web-analyzer)";
-const SITEMAP_CANDIDATES = ["/sitemap.xml", "/wp-sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml"];
+// Sitemap candidates tried in order when robots.txt doesn't declare a Sitemap: directive.
+// robots.txt is always checked first (see below) — these are only the fallback probes.
+const SITEMAP_CANDIDATES = [
+  "/sitemap.xml",
+  "/wp-sitemap.xml",
+  "/sitemap_index.xml",
+  "/sitemap-index.xml",
+  "/sitemap/",          // Squarespace default
+  "/sitemap.php",       // Some custom PHP CMS
+  "/sitemaps.xml",      // Ghost + others
+  "/sitemap1.xml",      // Common flat-file patterns
+  "/news-sitemap.xml",  // Additional WordPress SEO plugin sitemaps
+];
 const MAX_CHILD_SITEMAPS = 25;
 export const ASSET_RE = /\.(xml|kml|jpe?g|png|webp|gif|svg|pdf|css|js|ico|zip|mp4|webm|json|webmanifest|md|txt|csv|woff2?|ttf|otf|eot|fon|ttc|mp3|wav|ogg|m4a|avi|mov)(?:[?#/]|$)/i;
 // Technical/infrastructure paths that a homepage's own <a href> links
@@ -75,6 +87,11 @@ export interface AnalyzedPage {
   navCategory?: string;
 }
 
+export interface ExternalStoreLink {
+  url: string;        // The href from the anchor tag
+  anchorText: string; // The visible link text (e.g. "shop", "store", "buy now")
+}
+
 export interface CrawlResult {
   origin: string;
   discoveredVia: string;
@@ -86,6 +103,8 @@ export interface CrawlResult {
   counts: Record<string, number>;
   warnings: string[];
   durationMs: number;
+  /** External links from the homepage that look like shop/store links (different domain). */
+  externalStoreLinks: ExternalStoreLink[];
 }
 
 import { fetchWithFallback, WAF_BLOCKED_STATUSES } from "./fetchWithFallback.js";
@@ -287,6 +306,11 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     // from the homepage-link supplement — collapse to a single page instead
     // of double-counting. WordPress permalinks canonically end in "/".
     let path = x.pathname.replace(/\/{2,}/g, "/");
+    // Normalize index page equivalents: /index.php, /index.html, /index.htm,
+    // /index.asp etc. are all canonical equivalents of "/". Without this, a
+    // sitemap that includes both "https://example.com/" and
+    // "https://example.com/index.php" produces a spurious second page entry.
+    path = path.replace(/\/index\.(php|html?|asp|aspx|cfm|jsp)$/i, "/");
     if (ASSET_RE.test(path) || NON_PAGE_PATH_RE.test(path) || DATE_ARCHIVE_PATH_RE.test(path)) return;
     if (path !== "/" && !path.endsWith("/")) path += "/";
     let row = found.get(path);
@@ -302,8 +326,42 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   console.log(`crawlSite: Starting sitemap discovery for ${origin}`);
   let childSitemaps: string[] = [];
   let indexUsed = "";
-  for (const cand of SITEMAP_CANDIDATES) {
-    const xml = await fetchText(origin + cand, undefined, trackStatus);
+
+  // Step 0: Always try robots.txt first — it explicitly declares the Sitemap
+  // URL and is the most authoritative signal available. Many sites list their
+  // sitemap in robots.txt even when the sitemap lives at a non-standard path.
+  // Confirmed live: theagelessclinic.com's robots.txt contains
+  // "Sitemap: https://www.theagelessclinic.com/sitemap.xml" — which we
+  // would have found anyway — but on custom CMS / Squarespace sites the
+  // path is often non-standard (e.g. /sitemap.xml?page=1 or /sitemap/).
+  const robotsUrls: string[] = [];
+  try {
+    const robotsText = await fetchText(origin + "/robots.txt", 8000, trackStatus);
+    if (robotsText) {
+      const sitemapLines = robotsText.match(/^Sitemap:\s*(.+)$/gim) || [];
+      for (const line of sitemapLines) {
+        const sitemapUrl = line.replace(/^Sitemap:\s*/i, "").trim();
+        if (sitemapUrl && /^https?:\/\//i.test(sitemapUrl)) {
+          robotsUrls.push(sitemapUrl);
+        }
+      }
+      if (robotsUrls.length > 0) {
+        console.log(`crawlSite: Found ${robotsUrls.length} sitemap URL(s) in robots.txt`);
+      }
+    }
+  } catch {
+    /* robots.txt fetch failure is non-fatal */
+  }
+
+  // Build the final candidate list: robots.txt declarations first (most
+  // authoritative), then the standard guesses as fallback.
+  const candidatePaths = [
+    ...robotsUrls,
+    ...SITEMAP_CANDIDATES.map((c) => origin + c).filter((u) => !robotsUrls.includes(u)),
+  ];
+
+  for (const candUrl of candidatePaths) {
+    const xml = await fetchText(candUrl, undefined, trackStatus);
     if (!xml) continue;
     const locs = locsOf(xml);
     const children = locs.filter((l) => /\.xml(\?|$)/i.test(l));
@@ -313,11 +371,12 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
         warnings.push(`Site has ${children.length} child sitemaps; only the first ${MAX_CHILD_SITEMAPS} were read.`);
       }
     } else if (locs.length) {
-      childSitemaps = [origin + cand]; // flat sitemap, no index
+      childSitemaps = [candUrl]; // flat sitemap, no index
     }
     if (childSitemaps.length) {
-      indexUsed = cand;
-      console.log(`crawlSite: Found ${childSitemaps.length} sitemaps via ${cand}`);
+      // Record which path we used (strip origin for display)
+      try { indexUsed = new URL(candUrl).pathname; } catch { indexUsed = candUrl; }
+      console.log(`crawlSite: Found ${childSitemaps.length} sitemaps via ${candUrl}`);
       break;
     }
   }
@@ -374,6 +433,37 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
       addNewOnly(new URL(m[1]!, origin).href, "page");
     } catch {
       /* skip */
+    }
+  }
+
+  // ---- collect external shop/store links from homepage ----
+  // Sites frequently link to an external storefront (a Shopify store on a
+  // different domain, an external vendor portal, etc.) from their navbar.
+  // These links are intentionally excluded from same-origin page counting,
+  // but they ARE a real "store" signal that should be reported. We collect
+  // them here so Phase 2 (platform detection) can fingerprint the external
+  // store and report it as isThirdParty=true with the correct platform.
+  //
+  // We identify a link as a potential external store if:
+  //   a) the anchor text matches shop/store/buy/cart/products keywords, OR
+  //   b) the href itself contains shop/store/shopify/cart patterns
+  // A deliberate conservative threshold: we don't want to flag every social
+  // media link or partner referral as a "store".
+  const externalStoreLinks: ExternalStoreLink[] = [];
+  const anchorRe = /<a\s[^>]*href=["']([^"'#?]+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  for (const m of homeHtml.matchAll(anchorRe)) {
+    const href = m[1]!.trim();
+    const rawText = m[2]!.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    try {
+      const linked = new URL(href, origin);
+      if (linked.origin === origin) continue; // same-origin — not an external store
+      const isStoreAnchor = /\bshop\b|\bstore\b|\bbuy\b|\bcart\b|\bproducts\b/i.test(rawText);
+      const isStoreHref = /shop\.|\\.shop|shopify|\/shop|\/store|cart\.|\.cart/i.test(linked.href);
+      if (isStoreAnchor || isStoreHref) {
+        externalStoreLinks.push({ url: linked.href, anchorText: rawText });
+      }
+    } catch {
+      /* skip unparseable hrefs */
     }
   }
 
@@ -554,6 +644,20 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
   const totalPages = pages.filter((p) => p.isPage).length;
   console.log(`crawlSite: Crawl completed in ${Date.now() - started}ms. Pages: ${totalPages}, Total URLs: ${found.size}`);
 
+  // Stale sitemap warning: if the sitemap found significantly fewer URLs than
+  // what the homepage-link pass discovered, the sitemap is probably outdated.
+  // This is common on custom/PHP sites that use a third-party sitemap generator
+  // run manually (e.g. www.xml-sitemaps.com) rather than an auto-regenerating plugin.
+  // Only warn when the sitemap was actually used (not homepage-links-only discovery)
+  // and when the gap is large enough to be actionable (>= 3x more from homepage).
+  if (sitemapOnlyCount > 0 && found.size >= sitemapOnlyCount * 3 && found.size - sitemapOnlyCount > 20) {
+    warnings.push(
+      `Sitemap appears incomplete or stale: sitemap provided ${sitemapOnlyCount} URL(s), ` +
+      `but homepage links discovered ${found.size - sitemapOnlyCount} additional URL(s). ` +
+      `Page count includes all discovered URLs; consider regenerating the sitemap.`
+    );
+  }
+
   return {
     origin,
     discoveredVia,
@@ -565,5 +669,6 @@ export async function crawlSite(siteUrl: string): Promise<CrawlResult> {
     counts,
     warnings,
     durationMs: Date.now() - started,
+    externalStoreLinks,
   };
 }

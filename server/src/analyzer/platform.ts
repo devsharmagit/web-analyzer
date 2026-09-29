@@ -58,6 +58,11 @@ const CMS_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
   { name: "Next.js", re: /_next\/static|_next\/data|next-head-count/i },
   { name: "Duda", re: /irp\.cdn-website\.com|dudamobile/i },
   { name: "GoDaddy", re: /godaddy\.com\/websites|gdwebsite/i },
+  { name: "Ghost", re: /ghost\.io|content\/themes\/ghost/i },
+  { name: "Drupal", re: /Drupal\.settings|drupal\.js|sites\/default\/files/i },
+  { name: "Joomla", re: /joomla|com_content|mosConfig/i },
+  { name: "HubSpot CMS", re: /hubspot\.com|hs-sites\.com|hs-analytics/i },
+  { name: "Craft CMS", re: /craft-cms|craftcms/i },
 ];
 
 const BUILDER_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
@@ -77,6 +82,67 @@ const ECOMMERCE_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
   { name: "Wix Stores", re: /wix-stores|wixstores/i },
   { name: "Squarespace Commerce", re: /sqs-cart|sqs-add-to-cart/i },
 ];
+
+// Custom platform fingerprints — used when no known CMS matches. These identify
+// WHAT the site was built with (framework/stack) so we can say "Custom (Bootstrap + PHP)"
+// instead of the unhelpful "Unknown".
+//
+// Ordered by how reliably the signal identifies the technology. Higher = more distinct.
+const CUSTOM_PLATFORM_CHECKS: Array<{ name: string; re: RegExp; weight: number }> = [
+  // JS Frameworks (high confidence — very distinctive signals)
+  { name: "React", re: /ReactDOM|react-dom|__reactFiber|data-reactroot|data-reactid/i, weight: 10 },
+  { name: "Vue", re: /vue\.global\.js|__vue_app__|data-v-[a-f0-9]{6,}|v-cloak|v-bind/i, weight: 10 },
+  { name: "Angular", re: /ng-version|angular\.js|ng-app|angular\/core|zone\.js/i, weight: 10 },
+  { name: "Svelte", re: /svelte|__svelte/i, weight: 10 },
+  // CSS Frameworks
+  { name: "Bootstrap", re: /bootstrap\.min\.css|bootstrap\.css|vendor\/bootstrap|cdn\.jsdelivr\.net\/npm\/bootstrap|stackpath\.bootstrapcdn\.com/i, weight: 7 },
+  { name: "Tailwind CSS", re: /tailwindcss|cdn\.tailwindcss\.com|@tailwind/i, weight: 7 },
+  { name: "Foundation", re: /foundation\.min\.css|\/foundation\//i, weight: 7 },
+  { name: "Bulma", re: /bulma\.min\.css|\/bulma\//i, weight: 6 },
+  // JS Libraries
+  { name: "jQuery", re: /jquery\.min\.js|jquery-[0-9]|jquery\/jquery|code\.jquery\.com/i, weight: 4 },
+  // Backend signals (inferred from URL patterns in the HTML)
+  { name: "PHP", re: /\.php["'?\s>]|action=["'][^"']+\.php/i, weight: 5 },
+  { name: "ASP.NET", re: /\.aspx["'?\s>]|__VIEWSTATE|WebResource\.axd/i, weight: 8 },
+  { name: "Ruby on Rails", re: /rails|turbolinks|data-remote=["']true/i, weight: 7 },
+  { name: "Laravel", re: /laravel|csrf-token.*content=["'][a-zA-Z0-9+\/]{40}/i, weight: 8 },
+];
+
+/**
+ * Identify what a custom/unknown site is built with (Bootstrap, PHP, React, etc.)
+ * so the UI can show "Custom (Bootstrap + PHP)" rather than just "Unknown".
+ * Called ONLY when no known CMS was detected.
+ */
+function detectCustomPlatform(html: string): Detection {
+  if (!html) return { value: "Custom", confidence: "unknown", evidence: ["No CMS fingerprint detected"] };
+
+  // Run all checks, collect those that match, sort by weight (most specific first)
+  const found: Array<{ name: string; weight: number; evidence: string }> = [];
+  for (const check of CUSTOM_PLATFORM_CHECKS) {
+    if (check.re.test(html)) {
+      found.push({ name: check.name, weight: check.weight, evidence: `"${check.re.source}" matched in page HTML` });
+    }
+  }
+
+  if (found.length === 0) {
+    return {
+      value: "Custom",
+      confidence: "unknown",
+      evidence: ["No known CMS, framework, or library fingerprints detected; likely a custom-built static site"],
+    };
+  }
+
+  // Sort descending by weight, keep top 3 for the label (avoid noisy labels like "Bootstrap + jQuery + PHP + React")
+  found.sort((a, b) => b.weight - a.weight);
+  const top = found.slice(0, 3);
+  const label = "Custom (" + top.map((f) => f.name).join(" + ") + ")";
+
+  return {
+    value: label,
+    confidence: "likely",
+    evidence: found.map((f) => f.evidence),
+  };
+}
 
 // Sites commonly carry markers for more than one builder at once (an Elementor
 // site can still have a handful of leftover Divi classes from a theme, or vice
@@ -154,7 +220,97 @@ export async function detectPlatform(origin: string): Promise<PlatformResult> {
     }
   }
 
+  // If no CMS was identified, run custom platform detection to determine WHAT
+  // the site is built with (Bootstrap, PHP, React, etc.) so the UI can show
+  // "Custom (Bootstrap + PHP)" instead of the unhelpful "Unknown".
+  if (!cms.value) {
+    const custom = detectCustomPlatform(html);
+    cms.value = custom.value;
+    cms.confidence = custom.confidence;
+    cms.evidence = custom.evidence;
+  }
+
   return { cms, builder, ecommerce };
+}
+
+export interface ExternalStoreResult {
+  platform: string;
+  finalUrl: string;
+  confidence: Confidence;
+  evidence: string[];
+}
+
+/**
+ * Detect a cross-domain store by fingerprinting the target URL of a shop/store
+ * link found in the homepage navbar. Follows redirects (up to 3 hops) and
+ * fingerprints the final destination.
+ *
+ * Example: theagelessclinic.com navbar → agelessxpress.com → ageless.shop
+ * (Shopify). Without this, the analyzer reports "No store detected" even though
+ * the site has a fully active external shop.
+ */
+export async function detectExternalStore(externalLinks: string[]): Promise<ExternalStoreResult | null> {
+  if (!externalLinks.length) return null;
+
+  const EXTERNAL_ECOMMERCE_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
+    { name: "Shopify", re: /cdn\.shopify\.com|myshopify\.com|Shopify\.shop|shopify-features/i },
+    { name: "WooCommerce", re: /woocommerce/i },
+    { name: "BigCommerce", re: /bigcommerce\.com/i },
+    { name: "Magento", re: /mage\/|Magento_/i },
+    { name: "PrestaShop", re: /prestashop/i },
+  ];
+
+  for (const link of externalLinks.slice(0, 5)) { // limit to 5 to avoid long tail
+    try {
+      // Follow redirects to get the final landing URL and HTML
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 12000);
+      let finalUrl = link;
+      let html = "";
+      try {
+        const res = await fetch(link, {
+          redirect: "follow",
+          signal: ctl.signal,
+          headers: { "User-Agent": UA },
+        });
+        finalUrl = res.url || link;
+        if (res.ok) html = await res.text();
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (!html) continue;
+
+      // Check the final URL itself for common store domain patterns
+      const urlLower = finalUrl.toLowerCase();
+      if (/shopify\.com|myshopify\.com|\.shop\b/.test(urlLower)) {
+        // High-confidence Shopify domain
+        const shopifyHtml = EXTERNAL_ECOMMERCE_FINGERPRINTS.find((f) => f.name === "Shopify");
+        return {
+          platform: "Shopify",
+          finalUrl,
+          confidence: "high",
+          evidence: [`External store URL (${finalUrl}) matches Shopify domain pattern`],
+        };
+      }
+
+      // Fingerprint HTML for e-commerce markers
+      for (const fp of EXTERNAL_ECOMMERCE_FINGERPRINTS) {
+        if (fp.re.test(html)) {
+          return {
+            platform: fp.name,
+            finalUrl,
+            confidence: "likely",
+            evidence: [`"${fp.re.source}" matched in external store HTML (${finalUrl})`],
+          };
+        }
+      }
+    } catch {
+      // Individual link failure is non-fatal — try the next one
+    }
+  }
+
+  return null;
 }
 
 /**
