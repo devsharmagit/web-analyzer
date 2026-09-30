@@ -6,7 +6,7 @@ import { detectLocations, type LocationsResult } from "./locations.js";
 import { detectBeforeAfterGallery, type BeforeAfterResult } from "./beforeAfter.js";
 
 import { fetchHtml } from "./scrapeLite.js";
-import { getSessionCredits } from "./fetchWithFallback.js";
+import { trackProxyUsage } from "./fetchWithFallback.js";
 
 export interface AnalyzeResult {
   url: string;
@@ -21,21 +21,31 @@ export interface AnalyzeResult {
   locations: LocationsResult;
   beforeAfterGallery: BeforeAfterResult;
   crawl: Pick<CrawlResult, "discoveredVia" | "sitemaps" | "urlsSeen" | "durationMs" | "warnings"> & {
-    scraperApiCreditsUsed?: number;
-    proxyRequestsUsed?: number;
+    /** Paid-fallback usage by THIS analysis (not the server's running total). */
+    scraperApiCreditsUsed: number;
+    proxyRequestsUsed: number;
   };
 }
 
-// Tags the fallback with a "timed out" reason only when the timeout branch
-// actually wins the race — so a UI can distinguish "we checked, found nothing"
-// (the phase's own reason) from "we never got an answer in time".
-async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((resolve) =>
-      setTimeout(() => resolve({ ...fallback, reason: `timed out after ${ms}ms` } as T), ms)
-    ),
-  ]);
+// Tags an object fallback with a "timed out" reason only when the timeout
+// branch actually wins the race — so a UI can distinguish "we checked, found
+// nothing" (the phase's own reason) from "we never got an answer in time".
+// A null fallback stays null: spreading it used to produce a truthy
+// { reason } object, which the external-store check read as a detected store
+// (hasStore: true, platform: undefined) whenever it timed out.
+export async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(
+      () => resolve(fallback !== null && typeof fallback === "object" ? ({ ...fallback, reason: `timed out after ${ms}ms` } as T) : fallback),
+      ms
+    );
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -48,9 +58,16 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Pro
  * one slow/failing phase never fails the whole analysis.
  */
 export async function analyze(url: string): Promise<AnalyzeResult> {
+  const { result, usage } = await trackProxyUsage(() => runAnalysis(url));
+  result.crawl.proxyRequestsUsed = usage.proxyRequests;
+  result.crawl.scraperApiCreditsUsed = usage.scraperApiCredits;
+  return result;
+}
+
+async function runAnalysis(url: string): Promise<AnalyzeResult> {
   const crawl = await crawlSite(url);
 
-  const platformPromise = withTimeout(detectPlatform(crawl.origin), 30000, {
+  const platformPromise = withTimeout(detectPlatform(crawl.origin, crawl.homeHtml), 30000, {
     cms: { value: null, confidence: "unknown" as const, evidence: [] },
     builder: { value: null, confidence: "unknown" as const, evidence: [] },
     ecommerce: { value: null, confidence: "unknown" as const, evidence: [] },
@@ -61,7 +78,7 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
     source: null,
     list: [],
   });
-  const locationsPromise = withTimeout(detectLocations(crawl.origin, crawl.pages, crawl.sitemaps), 45000, {
+  const locationsPromise = withTimeout(detectLocations(crawl.origin, crawl.pages, crawl.sitemaps, crawl.homeHtml), 45000, {
     count: "unknown" as const,
     source: null,
     list: [],
@@ -170,8 +187,8 @@ export async function analyze(url: string): Promise<AnalyzeResult> {
       urlsSeen: crawl.urlsSeen,
       durationMs: crawl.durationMs,
       warnings: allWarnings,
-      scraperApiCreditsUsed: getSessionCredits(),
-      proxyRequestsUsed: getSessionCredits(),
+      scraperApiCreditsUsed: 0, // filled in by analyze()
+      proxyRequestsUsed: 0,
     },
   };
 }

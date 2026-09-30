@@ -113,6 +113,8 @@ URLs are dropped at ingestion time (inside the `add()` function) if they match a
 | `NON_PAGE_PATH_RE` | `/wp-json/`, `/wp-login.php`, `/feed/` | WordPress API/admin/RSS |
 | `DATE_ARCHIVE_PATH_RE` | `/YYYY/`, `/YYYY/MM/`, `/YYYY/MM/DD/` | WordPress date archive pages that redirect to homepage |
 
+WordPress **taxonomy archives** — `/category/…`, `/tag/…`, `/author/…` paths, and every URL from a `category-`, `post_tag-`, `tag-`, `author-` or `product_tag-sitemap.xml` — are kept in `urlsSeen` but excluded from the page count and classification (`source: "archive"`, `isPage: false`), the same way videos are. A `/category/botox/` archive would otherwise match the service vocabulary: on culturemedspa.com, 19 of 39 "service" pages were category archives. WooCommerce `/product-category/` pages are not archives; they count toward the store.
+
 > **Why date archives are filtered**: Paths like `ruma.com/2025/10/28/` are WordPress date-based archive/index pages — not real posts. Many sites redirect them to the homepage, bloating blog counts. Real posts with date-based WordPress permalinks (e.g. `/2025/10/28/my-post-slug/`) are **not** filtered because they have a 5th path segment.
 
 ---

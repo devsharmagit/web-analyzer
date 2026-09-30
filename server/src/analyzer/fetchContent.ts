@@ -54,6 +54,39 @@ const EMPTY_SIGNALS: Omit<ContentSignals, "fetchFailed"> = {
 
 import * as cheerio from "cheerio";
 
+// Markers of a product detail page, across the store platforms this
+// vertical uses.
+const PRODUCT_PAGE_RES = [
+  /property=["']og:type["']\s+content=["']product["']/i,
+  /woocommerce-Price-amount/i,
+  /name=["']add-to-cart["']/i,
+  /class=["'][^"']*sqs-add-to-cart-button[^"']*["']/i, // Squarespace
+  /name=["']add["'][^>]*>.*add to cart/i, // Shopify
+  /class=["'][^"']*ProductActionButtons[^"']*["']/i, // Wix
+  /class=["'][^"']*shopify-payment-button[^"']*["']/i, // Shopify
+];
+
+// The slice of cheerio's API extractContentSignals uses. Crawlee ships its own
+// (CommonJS) cheerio typings, which TypeScript treats as a different type from
+// this file's ESM `cheerio` import — so the helper takes this structural shape
+// and both parsers' `$` fit it.
+type CheerioQuery = (selector: string) => {
+  first(): { text(): string };
+  eq(index: number): { text(): string };
+  attr(name: string): string | undefined;
+};
+
+/** Title, first h1 (plus up to three h2s) and meta description, and whether it's a product page. */
+export function extractContentSignals(html: string, $: CheerioQuery): ContentSignals {
+  const title = $("title").first().text().trim();
+  const h1Text = $("h1").first().text().trim();
+  const h2Sub = [0, 1, 2].map((i) => $("h2").eq(i).text().trim()).filter(Boolean).join(" | ");
+  const h1 = h2Sub ? (h1Text ? `${h1Text} | ${h2Sub}` : h2Sub) : h1Text;
+  const metaDescription = $('meta[name="description"]').attr("content")?.trim() || "";
+  const looksLikeProduct = PRODUCT_PAGE_RES.some((re) => re.test(html));
+  return { title, h1, metaDescription, looksLikeProduct, fetchFailed: false };
+}
+
 /** Fetch content signals for a bounded list of URLs, concurrently, with retries. */
 export async function fetchContentSignals(
   urls: string[],
@@ -71,29 +104,7 @@ export async function fetchContentSignals(
     requestHandlerTimeoutSecs: opts.timeoutSecs ?? 12,
     maxRequestRetries: 1,
     async requestHandler({ request, $, body }) {
-      const html = String(body);
-      const looksLikeProduct =
-        /property=["']og:type["']\s+content=["']product["']/i.test(html) ||
-        /woocommerce-Price-amount/i.test(html) ||
-        /name=["']add-to-cart["']/i.test(html) ||
-        /class=["'][^"']*sqs-add-to-cart-button[^"']*["']/i.test(html) || // Squarespace
-        /name=["']add["'][^>]*>.*add to cart/i.test(html) || // Shopify
-        /class=["'][^"']*ProductActionButtons[^"']*["']/i.test(html) || // Wix
-        /class=["'][^"']*shopify-payment-button[^"']*["']/i.test(html); // Shopify
-
-      const title = $("title").first().text().trim();
-      const h1Text = $("h1").first().text().trim();
-      const h2Sub = $("h2").slice(0, 3).map((_i, el) => $(el).text().trim()).get().filter(Boolean).join(" | ");
-      const h1 = h2Sub ? (h1Text ? `${h1Text} | ${h2Sub}` : h2Sub) : h1Text;
-      const metaDescription = $('meta[name="description"]').attr("content")?.trim() || "";
-
-      results.set(request.url, {
-        title,
-        h1,
-        metaDescription,
-        looksLikeProduct,
-        fetchFailed: false,
-      });
+      results.set(request.url, extractContentSignals(String(body), $));
     },
     failedRequestHandler({ request }) {
       failedUrls.push(request.url);
@@ -119,30 +130,7 @@ export async function fetchContentSignals(
             results.set(url, { ...EMPTY_SIGNALS, fetchFailed: true });
             return;
           }
-          const html = resp.html;
-          const $ = cheerio.load(html);
-
-          const title = $("title").first().text().trim();
-          const h1Text = $("h1").first().text().trim();
-          const h2Sub = $("h2").slice(0, 3).map((_i, el) => $(el).text().trim()).get().filter(Boolean).join(" | ");
-          const h1 = h2Sub ? (h1Text ? `${h1Text} | ${h2Sub}` : h2Sub) : h1Text;
-          const metaDescription = $('meta[name="description"]').attr("content")?.trim() || "";
-          const looksLikeProduct =
-            /property=["']og:type["']\s+content=["']product["']/i.test(html) ||
-            /woocommerce-Price-amount/i.test(html) ||
-            /name=["']add-to-cart["']/i.test(html) ||
-            /class=["'][^"']*sqs-add-to-cart-button[^"']*["']/i.test(html) ||
-            /name=["']add["'][^>]*>.*add to cart/i.test(html) ||
-            /class=["'][^"']*ProductActionButtons[^"']*["']/i.test(html) ||
-            /class=["'][^"']*shopify-payment-button[^"']*["']/i.test(html);
-
-          results.set(url, {
-            title,
-            h1,
-            metaDescription,
-            looksLikeProduct,
-            fetchFailed: false,
-          });
+          results.set(url, extractContentSignals(resp.html, cheerio.load(resp.html)));
         } catch {
           results.set(url, { ...EMPTY_SIGNALS, fetchFailed: true });
         }

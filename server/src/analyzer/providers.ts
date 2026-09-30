@@ -12,11 +12,21 @@ import { geminiAvailable, geminiCall } from "./gemini.js";
 // team page ("Meet the Glo Squad", "Our Injector Crew") in ways no fixed path
 // list can anticipate, so any path containing team/staff/provider/squad/crew
 // vocabulary — or the "meet-the-" prefix pattern — counts.
+// The tier-2 keyword must start a path segment or a hyphenated word:
+// "(^|-)" alone never matched a segment start, because every path begins
+// with "/" — so /injectors/, /doctors/ and /team-members/ were all missed.
 const TEAM_PATH_PATTERNS = [
   /^\/(team|our-team|staff|providers|meet-the-team)\/?$/i,
-  /meet-the-|(^|-)(team|staff|squad|crew|providers?|injectors?|doctors?)(-|\/?$)/i,
+  /meet-the-|(^|[-/])(team|staff|squad|crew|providers?|injectors?|doctors?)(-|\/?$)/i,
   /^\/(about|about-us)\/?$/i,
 ];
+// Team pages tried, in priority order, until one yields people.
+const MAX_TEAM_PAGES = 3;
+// Individual bio pages under a team hub (/our-team/jane-doe/) read alongside it.
+const MAX_BIO_PAGES = 8;
+// Per-page text budget for the one batched AI extraction call.
+const HUB_TEXT_CHARS = 12000;
+const BIO_TEXT_CHARS = 2500;
 
 const CREDENTIAL_RE = /\b(MD|DO|NP|PA-C|PA|RN|BSN|DNP|FNP-C|LME|DMD|APRN|CANS|CRNA|LE|CPPS|CLT)\b/;
 
@@ -35,12 +45,23 @@ export interface ProvidersResult {
   reason?: string; // set when count is "unknown", explains why detection stopped
 }
 
-function findTeamPage(pages: AnalyzedPage[]): AnalyzedPage | null {
+/** Team-page candidates, most specific pattern first; each page appears once. */
+export function findTeamPages(pages: AnalyzedPage[]): AnalyzedPage[] {
+  const out: AnalyzedPage[] = [];
   for (const re of TEAM_PATH_PATTERNS) {
-    const hit = pages.find((p) => re.test(p.path));
-    if (hit) return hit;
+    for (const p of pages) {
+      if (re.test(p.path) && !out.includes(p)) out.push(p);
+    }
   }
-  return null;
+  return out;
+}
+
+/** Pages one level below a team hub — /our-team/jane-doe/ under /our-team/. */
+function bioPagesUnder(hub: AnalyzedPage, pages: AnalyzedPage[]): AnalyzedPage[] {
+  if (hub.path === "/") return [];
+  return pages
+    .filter((p) => p.isPage && p.path.startsWith(hub.path) && /^[^/]+\/$/.test(p.path.slice(hub.path.length)))
+    .slice(0, MAX_BIO_PAGES);
 }
 
 function fromJsonLd(blocks: any[]): Provider[] {
@@ -106,26 +127,46 @@ function dedupeProviders(people: Provider[]): Provider[] {
   return out;
 }
 
-/** Find and extract provider info from the site's team page, if one exists. */
+/**
+ * Read one team page plus its individual bio pages: JSON-LD Person entries
+ * from all of them first, then — if none — one batched AI extraction over
+ * their combined text. Multi-location clinics often list only names on the
+ * hub and keep credentials/roles on each provider's own page.
+ */
+async function extractFromTeamPage(hub: AnalyzedPage, pages: AnalyzedPage[]): Promise<{ fetched: boolean; people: Provider[] }> {
+  const bios = bioPagesUnder(hub, pages);
+  const [hubHtml, ...bioHtml] = await Promise.all([fetchHtml(hub.url), ...bios.map((b) => fetchHtml(b.url))]);
+  if (!hubHtml) return { fetched: false, people: [] };
+
+  const allHtml = [hubHtml, ...bioHtml].filter(Boolean);
+  const jsonLdPeople = dedupeProviders(allHtml.flatMap((h) => fromJsonLd(extractJsonLd(h))));
+  if (jsonLdPeople.length) return { fetched: true, people: jsonLdPeople };
+
+  const text = [
+    stripToText(hubHtml, HUB_TEXT_CHARS),
+    ...bioHtml.filter(Boolean).map((h, i) => `--- ${bios[i]!.path}\n${stripToText(h, BIO_TEXT_CHARS)}`),
+  ].join("\n\n");
+  return { fetched: true, people: dedupeProviders(await fromAi(text)) };
+}
+
+/** Find and extract provider info from the site's team page(s), if any exist. */
 export async function detectProviders(origin: string, pages: AnalyzedPage[]): Promise<ProvidersResult> {
-  const teamPage = findTeamPage(pages);
-  if (!teamPage) return { count: "unknown", source: null, list: [], reason: "no team/staff/about-shaped page found in the crawl" };
+  const candidates = findTeamPages(pages).slice(0, MAX_TEAM_PAGES);
+  if (!candidates.length) return { count: "unknown", source: null, list: [], reason: "no team/staff/about-shaped page found in the crawl" };
 
-  const html = await fetchHtml(teamPage.url);
-  if (!html) return { count: "unknown", source: teamPage.path, list: [], reason: "team page found but could not be fetched" };
-
-  const jsonLdPeople = dedupeProviders(fromJsonLd(extractJsonLd(html)));
-  if (jsonLdPeople.length) {
-    return { count: jsonLdPeople.length, source: teamPage.path, list: jsonLdPeople };
+  // Most specific candidate first; fall through to the next when a page has
+  // nobody on it (e.g. a /team/ page that's only a "join our team" pitch).
+  let anyFetched = false;
+  for (const page of candidates) {
+    const { fetched, people } = await extractFromTeamPage(page, pages);
+    anyFetched ||= fetched;
+    if (people.length) return { count: people.length, source: page.path, list: people };
   }
 
-  const aiPeople = dedupeProviders(await fromAi(stripToText(html)));
-  if (aiPeople.length) {
-    return { count: aiPeople.length, source: teamPage.path, list: aiPeople };
-  }
-
+  const tried = candidates.map((p) => p.path).join(", ");
+  if (!anyFetched) return { count: "unknown", source: candidates[0]!.path, list: [], reason: `team page${candidates.length === 1 ? "" : "s"} found (${tried}) but could not be fetched` };
   const reason = geminiAvailable()
-    ? "team page fetched but neither JSON-LD nor AI extraction found any people on it"
-    : "team page fetched but no JSON-LD people, and AI extraction is unavailable (no GEMINI_KEYS configured)";
-  return { count: "unknown", source: teamPage.path, list: [], reason };
+    ? `team page${candidates.length === 1 ? "" : "s"} fetched (${tried}) but neither JSON-LD nor AI extraction found any people`
+    : `team page${candidates.length === 1 ? "" : "s"} fetched (${tried}) but no JSON-LD people, and AI extraction is unavailable (no GEMINI_KEYS configured)`;
+  return { count: "unknown", source: candidates[0]!.path, list: [], reason };
 }

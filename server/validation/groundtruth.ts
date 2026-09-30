@@ -4,6 +4,11 @@
 
 const UA = "Mozilla/5.0 (compatible; G99-Validator/1.0)";
 const NON_PAGE_SOURCES = new Set(["product", "product_cat", "video", "attachment", "image", "local"]);
+// WordPress taxonomy archives (category/tag/author listing pages) aren't
+// pages either — the definition the analyzer uses too. By sitemap, or by path
+// when a site lists them in a generic sitemap.
+const ARCHIVE_SOURCES = new Set(["category", "post_tag", "tag", "author", "product_tag"]);
+const ARCHIVE_PATH_RE = /\/(category|tag|author)\/[^/]+/i;
 
 export interface GroundTruth {
   host: string;
@@ -105,10 +110,11 @@ export async function crawlGroundTruth(siteUrl: string): Promise<GroundTruth> {
   // analyzer's SOURCE_RANK precedence, computed independently here).
   const countsBySource: Record<string, number> = {};
   let totalPages = 0;
-  for (const sources of pathSources.values()) {
+  for (const [path, sources] of pathSources) {
     const winner = [...sources].sort((a, b) => rankOf(b) - rankOf(a))[0]!;
     countsBySource[winner] = (countsBySource[winner] || 0) + 1;
-    if (!NON_PAGE_SOURCES.has(winner)) totalPages++;
+    const isArchive = ARCHIVE_PATH_RE.test(path) || [...sources].some((s) => ARCHIVE_SOURCES.has(s));
+    if (!NON_PAGE_SOURCES.has(winner) && !isArchive) totalPages++;
   }
 
   // Platform signals — independent regex pass over the homepage.

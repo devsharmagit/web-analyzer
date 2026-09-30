@@ -2,8 +2,6 @@
 // Q6 (do they sell anything). One homepage fetch plus two cheap probes; no
 // crawling here (Phase 1 already crawled).
 
-const UA = "Mozilla/5.0 (compatible; G99-Analyzer/1.0)";
-
 export type Confidence = "high" | "likely" | "unknown";
 
 export interface Detection {
@@ -28,10 +26,11 @@ export interface StoreResult {
   notes?: string;
 }
 
-import { fetchWithFallback } from "./fetchWithFallback.js";
+import { ANALYZER_UA as UA, fetchWithFallback } from "./fetchWithFallback.js";
+import { isPublicUrl } from "./urlSafety.js";
 
 async function fetchText(url: string, timeoutMs = 25000): Promise<string> {
-  const res = await fetchWithFallback(url, { timeoutMs, headers: { "User-Agent": UA } });
+  const res = await fetchWithFallback(url, { timeoutMs });
   return res.ok ? res.html : "";
 }
 
@@ -57,11 +56,17 @@ const CMS_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
   { name: "Webflow", re: /webflow\.com|website-files\.com/i },
   { name: "Next.js", re: /_next\/static|_next\/data|next-head-count/i },
   { name: "Duda", re: /irp\.cdn-website\.com|dudamobile/i },
-  { name: "GoDaddy", re: /godaddy\.com\/websites|gdwebsite/i },
+  // wsimg.com is GoDaddy Website Builder's asset CDN (img1.wsimg.com) —
+  // confirmed live on lacosmedic.com: 395 references, and none of the other
+  // markers present.
+  { name: "GoDaddy Website Builder", re: /wsimg\.com|godaddy\.com\/websites|gdwebsite|godaddysites\.com/i },
   { name: "Ghost", re: /ghost\.io|content\/themes\/ghost/i },
   { name: "Drupal", re: /Drupal\.settings|drupal\.js|sites\/default\/files/i },
   { name: "Joomla", re: /joomla|com_content|mosConfig/i },
-  { name: "HubSpot CMS", re: /hubspot\.com|hs-sites\.com|hs-analytics/i },
+  // Only markers of pages HOSTED on HubSpot. "hs-analytics" / hubspot.com also
+  // appear on any site that merely embeds HubSpot's tracking script or forms,
+  // which is common on WordPress sites.
+  { name: "HubSpot CMS", re: /hs_cos_wrapper|hs-sites\.com|hubspotusercontent|\/hs\/hsstatic\//i },
   { name: "Craft CMS", re: /craft-cms|craftcms/i },
 ];
 
@@ -80,7 +85,10 @@ const ECOMMERCE_FINGERPRINTS: Array<{ name: string; re: RegExp }> = [
   { name: "BigCommerce", re: /bigcommerce\.com/i },
   { name: "Ecwid", re: /ecwid\.com|xproductbrowser/i },
   { name: "Wix Stores", re: /wix-stores|wixstores/i },
-  { name: "Squarespace Commerce", re: /sqs-cart|sqs-add-to-cart/i },
+  // Product-level markers only. "sqs-cart-*" is the header cart icon, present
+  // whenever commerce is merely enabled — confirmed on bloomaesthetics.com,
+  // whose /shop returns 404.
+  { name: "Squarespace Commerce", re: /sqs-add-to-cart|ProductList-item|ProductItem-details/i },
 ];
 
 // Custom platform fingerprints — used when no known CMS matches. These identify
@@ -164,9 +172,13 @@ function detectFromHtml(html: string, table: Array<{ name: string; re: RegExp }>
   };
 }
 
-/** Fingerprint the platform (CMS, page builder, e-commerce) from one homepage fetch + two probes. */
-export async function detectPlatform(origin: string): Promise<PlatformResult> {
-  const html = await fetchText(origin + "/");
+/**
+ * Fingerprint the platform (CMS, page builder, e-commerce) from the homepage
+ * HTML plus one probe. Pass the homepage HTML the crawl already fetched to
+ * avoid requesting it again; it's only fetched here when that's empty.
+ */
+export async function detectPlatform(origin: string, homeHtml = ""): Promise<PlatformResult> {
+  const html = homeHtml || (await fetchText(origin + "/"));
 
   const cms = detectFromHtml(html, CMS_FINGERPRINTS);
   const builder = detectFromHtml(html, BUILDER_FINGERPRINTS);
@@ -192,6 +204,14 @@ export async function detectPlatform(origin: string): Promise<PlatformResult> {
       cms.value = "Webflow";
       cms.confidence = "high";
       cms.evidence.push(`<meta name="generator"> = "${gen}"`);
+    } else if (/go ?daddy|starfield/i.test(gen)) {
+      cms.value = "GoDaddy Website Builder";
+      cms.confidence = "high";
+      cms.evidence.push(`<meta name="generator"> = "${gen}"`);
+    } else if (/hubspot/i.test(gen)) {
+      cms.value = "HubSpot CMS";
+      cms.confidence = "high";
+      cms.evidence.push(`<meta name="generator"> = "${gen}"`);
     } else if (cms.value && new RegExp(cms.value, "i").test(gen)) {
       cms.confidence = "high";
       cms.evidence.push(`<meta name="generator"> confirms "${gen}"`);
@@ -213,7 +233,7 @@ export async function detectPlatform(origin: string): Promise<PlatformResult> {
   const themeMatch = html.match(/\/themes\/([a-z0-9_-]+)\//i);
   if (themeMatch) {
     const theme = themeMatch[1]!;
-    (builder.value ? builder : builder).evidence.push(`theme path: /themes/${theme}/`);
+    builder.evidence.push(`theme path: /themes/${theme}/`);
     if (!builder.value) {
       builder.value = theme;
       builder.confidence = "likely";
@@ -256,61 +276,63 @@ export async function detectExternalStore(externalLinks: string[]): Promise<Exte
     { name: "Shopify", re: /cdn\.shopify\.com|myshopify\.com|Shopify\.shop|shopify-features/i },
     { name: "WooCommerce", re: /woocommerce/i },
     { name: "BigCommerce", re: /bigcommerce\.com/i },
-    { name: "Magento", re: /mage\/|Magento_/i },
+    // "ec-instant-site" is Ecwid Instant Site's generator tag — confirmed on
+    // geauxstore.com, the store lacosmedic.com links to as "GEAUX STORE".
+    { name: "Ecwid", re: /ec-instant-site|app\.ecwid\.com|ecwid\.com\/script/i },
+    // Magento-specific tokens only. The old /mage\/|Magento_/ matched the
+    // "mage/" inside "image/" — present on nearly every page (type="image/png")
+    // — so almost any external link was reported as a Magento store.
+    { name: "Magento", re: /Magento_[A-Z]|data-mage-init|x-magento-init|\/static\/version\d+\/frontend\//i },
     { name: "PrestaShop", re: /prestashop/i },
   ];
 
-  for (const link of externalLinks.slice(0, 5)) { // limit to 5 to avoid long tail
-    try {
-      // Follow redirects to get the final landing URL and HTML
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 12000);
-      let finalUrl = link;
-      let html = "";
+  // Checked in parallel (the caller gives this whole step ~12s), then the
+  // first link in homepage order that fingerprints as a store wins.
+  const results = await Promise.all(
+    externalLinks.slice(0, 5).map(async (link): Promise<ExternalStoreResult | null> => {
+      // These URLs come from the site's own HTML, so they get the same
+      // public-address check as the site itself before the server fetches them.
+      if (!(await isPublicUrl(link))) return null;
       try {
+        // Follow redirects to get the final landing URL and HTML
         const res = await fetch(link, {
           redirect: "follow",
-          signal: ctl.signal,
+          signal: AbortSignal.timeout(10000),
           headers: { "User-Agent": UA },
         });
-        finalUrl = res.url || link;
-        if (res.ok) html = await res.text();
-      } finally {
-        clearTimeout(timer);
-      }
+        const finalUrl = res.url || link;
+        const html = res.ok ? await res.text() : "";
+        if (!html) return null;
 
-      if (!html) continue;
-
-      // Check the final URL itself for common store domain patterns
-      const urlLower = finalUrl.toLowerCase();
-      if (/shopify\.com|myshopify\.com|\.shop\b/.test(urlLower)) {
-        // High-confidence Shopify domain
-        const shopifyHtml = EXTERNAL_ECOMMERCE_FINGERPRINTS.find((f) => f.name === "Shopify");
-        return {
-          platform: "Shopify",
-          finalUrl,
-          confidence: "high",
-          evidence: [`External store URL (${finalUrl}) matches Shopify domain pattern`],
-        };
-      }
-
-      // Fingerprint HTML for e-commerce markers
-      for (const fp of EXTERNAL_ECOMMERCE_FINGERPRINTS) {
-        if (fp.re.test(html)) {
+        // Fingerprint HTML for e-commerce markers. (A store on a .shop domain
+        // isn't necessarily Shopify — the TLD is open to any platform — so the
+        // domain alone no longer decides it; a Shopify store's HTML always
+        // references cdn.shopify.com.)
+        for (const fp of EXTERNAL_ECOMMERCE_FINGERPRINTS) {
+          if (fp.re.test(html)) {
+            return {
+              platform: fp.name,
+              finalUrl,
+              confidence: "likely",
+              evidence: [`"${fp.re.source}" matched in external store HTML (${finalUrl})`],
+            };
+          }
+        }
+        if (/(^|\.)myshopify\.com$/i.test(new URL(finalUrl).hostname)) {
           return {
-            platform: fp.name,
+            platform: "Shopify",
             finalUrl,
-            confidence: "likely",
-            evidence: [`"${fp.re.source}" matched in external store HTML (${finalUrl})`],
+            confidence: "high",
+            evidence: [`External store URL (${finalUrl}) is a myshopify.com store`],
           };
         }
+      } catch {
+        // Individual link failure is non-fatal
       }
-    } catch {
-      // Individual link failure is non-fatal — try the next one
-    }
-  }
-
-  return null;
+      return null;
+    })
+  );
+  return results.find((r) => r !== null) ?? null;
 }
 
 /**

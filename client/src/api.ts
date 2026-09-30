@@ -54,8 +54,14 @@ export interface ProvidersResult {
 
 export interface Location {
   name: string;
+  /** The full address on one line, as the site gives it. */
   address: string;
   phone: string;
+  // Structured parts, when the server could determine them (US addresses).
+  street?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
 }
 
 export interface LocationsResult {
@@ -93,6 +99,9 @@ export interface AnalyzeResult {
     urlsSeen: number;
     durationMs: number;
     warnings: string[];
+    /** Paid-fallback usage by this analysis. */
+    proxyRequestsUsed?: number;
+    scraperApiCreditsUsed?: number;
   };
 }
 

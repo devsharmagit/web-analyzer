@@ -7,32 +7,57 @@ interface GeminiPart {
   text: string;
 }
 
-export async function embedText(text: string): Promise<number[]> {
+// Same key rotation as geminiCall(): a rate-limited (429) or unavailable (503)
+// key moves on to the next one instead of failing every embedding. Each
+// attempt has its own timeout; `signal` lets the caller abort the whole call
+// (classify.ts uses it as a deadline for its embedding stage).
+export async function embedText(text: string, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<number[]> {
   const GEMINI_KEYS = keys();
   if (!GEMINI_KEYS.length) throw new Error("No GEMINI_KEYS configured");
-  
-  const key = GEMINI_KEYS[gkIdx % GEMINI_KEYS.length]!;
-  
-  const body = {
+
+  const body = JSON.stringify({
     model: "models/gemini-embedding-2",
-    content: { parts: [{ text }] }
-  };
-  
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify(body)
+    content: { parts: [{ text }] },
   });
-  
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Embedding API error: ${res.status} ${errorText}`);
+
+  let lastErr: Error | null = null;
+  for (let i = 0; i < GEMINI_KEYS.length; i++) {
+    if (opts.signal?.aborted) break;
+    const key = GEMINI_KEYS[(gkIdx + i) % GEMINI_KEYS.length]!;
+    const timeout = AbortSignal.timeout(opts.timeoutMs ?? 15000);
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent`, {
+        method: "POST",
+        signal: opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout,
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body,
+      });
+      if (res.status === 429 || res.status === 503) {
+        lastErr = new Error(`Embedding API error: ${res.status}`);
+        continue;
+      }
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Embedding API error: ${res.status} ${errorText.slice(0, 200)}`);
+      }
+      const data: any = await res.json();
+      gkIdx = (gkIdx + i + 1) % GEMINI_KEYS.length;
+      return data.embedding.values;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      // A non-retryable API error (bad request, auth) will fail the same way
+      // on every key — stop instead of burning through all of them.
+      if (/Embedding API error: (400|401|403)/.test(lastErr.message)) break;
+    }
   }
-  const data = await res.json();
-  return data.embedding.values;
+  throw lastErr || new Error("Embedding call aborted");
 }
 
 export function cosineSimilarity(vecA: number[], vecB: number[]): number {
+  // Vectors from different embedding models (e.g. prototypes computed with an
+  // older model) aren't comparable at all — a partial dot product over the
+  // shorter one would look like a real score.
+  if (vecA.length !== vecB.length) return 0;
   let dotProduct = 0;
   let normA = 0;
   let normB = 0;

@@ -1,31 +1,62 @@
+import "../loadEnv.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 
-// Ensure .env is loaded in direct invocations / tests if not already loaded
-if (!process.env.WEBSHARE_API_KEY && !process.env.SCRAPER_API_KEY) {
-  try {
-    process.loadEnvFile(new URL("../../../.env", import.meta.url));
-  } catch {
-    try {
-      process.loadEnvFile(new URL("../../.env", import.meta.url));
-    } catch {}
-  }
-}
+// The one User-Agent the analyzer identifies itself with. Honest and
+// identifiable (a name plus an info URL, the same shape as Googlebot's) —
+// see the note at the top of crawl.ts.
+export const ANALYZER_UA = "Mozilla/5.0 (compatible; G99WebAnalyzer/1.0; +https://github.com/devsharmagit/web-analyzer)";
 
 export interface FetchResult {
   ok: boolean;
   status: number;
   html: string;
+  /** URL of the final response after redirects (the requested URL if none). */
+  finalUrl: string;
   tier: "direct" | "webshare_proxy" | "scraperapi_plain" | "scraperapi_rendered" | "failed";
   creditsUsed: number;
   error?: string;
 }
 
-// Running session proxy / credit counters
+// Paid-fallback usage. The session totals accumulate across every analysis
+// since the server started (the /api/*/credits endpoints report them); the
+// per-analysis counter lives in AsyncLocalStorage so concurrent analyses
+// each report only their own usage — see trackProxyUsage().
 export let sessionProxyRequestsUsed = 0;
 export let sessionScraperApiCreditsUsed = 0;
 
+export interface ProxyUsage {
+  proxyRequests: number;
+  scraperApiCredits: number;
+}
+const usageStore = new AsyncLocalStorage<ProxyUsage>();
+
+/** Run `fn`, counting the proxy/ScraperAPI usage of every fetch made inside it. */
+export async function trackProxyUsage<T>(fn: () => Promise<T>): Promise<{ result: T; usage: ProxyUsage }> {
+  const usage: ProxyUsage = { proxyRequests: 0, scraperApiCredits: 0 };
+  const result = await usageStore.run(usage, fn);
+  return { result, usage };
+}
+
+function recordProxyRequest(): void {
+  sessionProxyRequestsUsed += 1;
+  const usage = usageStore.getStore();
+  if (usage) usage.proxyRequests += 1;
+}
+
+function recordScraperApiCredits(cost: number): void {
+  sessionScraperApiCreditsUsed += cost;
+  const usage = usageStore.getStore();
+  if (usage) usage.scraperApiCredits += cost;
+}
+
+export function getSessionUsage(): ProxyUsage {
+  return { proxyRequests: sessionProxyRequestsUsed, scraperApiCredits: sessionScraperApiCreditsUsed };
+}
+
+/** Total paid-fallback usage this session: proxy requests plus ScraperAPI credits. */
 export function getSessionCredits(): number {
-  return sessionProxyRequestsUsed || sessionScraperApiCreditsUsed;
+  return sessionProxyRequestsUsed + sessionScraperApiCreditsUsed;
 }
 
 export function resetSessionCredits(): void {
@@ -179,19 +210,18 @@ export async function fetchWithFallback(
 
   if (!options?.forceFallback) {
     try {
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), timeoutMs);
+      // The signal stays armed until the body has been read — clearing it
+      // right after the headers arrived let a server that stalls mid-body
+      // hang the request indefinitely.
       const resp = await fetch(url, {
         redirect: "follow",
-        signal: ctl.signal,
+        signal: AbortSignal.timeout(timeoutMs),
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "User-Agent": ANALYZER_UA,
           Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           ...options?.headers,
         },
       });
-      clearTimeout(timer);
       directStatus = resp.status;
 
       if (resp.ok) {
@@ -200,6 +230,7 @@ export async function fetchWithFallback(
           ok: true,
           status: resp.status,
           html,
+          finalUrl: resp.url || url,
           tier: "direct",
           creditsUsed: 0,
         };
@@ -211,6 +242,7 @@ export async function fetchWithFallback(
           ok: false,
           status: resp.status,
           html: "",
+          finalUrl: url,
           tier: "direct",
           creditsUsed: 0,
           error: `HTTP ${resp.status}`,
@@ -226,6 +258,7 @@ export async function fetchWithFallback(
           ok: false,
           status: 0,
           html: "",
+          finalUrl: url,
           tier: "direct",
           creditsUsed: 0,
           error: `Non-recoverable error: ${err?.code || err?.message || err}`,
@@ -247,6 +280,7 @@ export async function fetchWithFallback(
         ok: false,
         status: directStatus || 0,
         html: "",
+        finalUrl: url,
         tier: "failed",
         creditsUsed: 0,
         error: `Direct fetch failed (${directStatus || directError?.code || "network error"}) and Webshare proxy initialization failed`,
@@ -259,15 +293,13 @@ export async function fetchWithFallback(
         dispatcher: agent,
         signal: AbortSignal.timeout(30000),
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "User-Agent": ANALYZER_UA,
           Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           ...options?.headers,
         },
       });
 
-      sessionProxyRequestsUsed += 1;
-      sessionScraperApiCreditsUsed += 1; // Kept in sync for backward compatibility
+      recordProxyRequest();
 
       console.log(`[WEBSHARE] Proxy fallback returned HTTP ${resp.status} for ${url} (Total proxy requests: ${sessionProxyRequestsUsed})`);
 
@@ -277,6 +309,7 @@ export async function fetchWithFallback(
           ok: true,
           status: resp.status,
           html,
+          finalUrl: resp.url || url,
           tier: "webshare_proxy",
           creditsUsed: 1,
         };
@@ -286,6 +319,7 @@ export async function fetchWithFallback(
         ok: false,
         status: resp.status,
         html: "",
+        finalUrl: url,
         tier: "failed",
         creditsUsed: 1,
         error: `Webshare proxy returned HTTP ${resp.status}`,
@@ -296,6 +330,7 @@ export async function fetchWithFallback(
         ok: false,
         status: 0,
         html: "",
+        finalUrl: url,
         tier: "failed",
         creditsUsed: 0,
         error: `Webshare proxy network error: ${err?.message || err}`,
@@ -308,14 +343,13 @@ export async function fetchWithFallback(
   // ----------------------------------------------------
   if (scraperKey) {
     try {
-      const scraperUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}`;
+      const scraperUrl = `https://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}`;
       console.log(`[SCRAPERAPI] Calling plain fallback (render=false) for: ${url}`);
 
       const resp = await fetch(scraperUrl, { signal: AbortSignal.timeout(30000) });
       const costHeader = resp.headers.get("sa-credit-cost");
       const cost = costHeader ? parseInt(costHeader, 10) : 1;
-      sessionScraperApiCreditsUsed += cost;
-      sessionProxyRequestsUsed += cost;
+      recordScraperApiCredits(cost);
 
       console.log(`[SCRAPERAPI] Plain fallback returned HTTP ${resp.status} for ${url} (Credits consumed: ${cost}, Session total: ${sessionScraperApiCreditsUsed})`);
 
@@ -325,6 +359,7 @@ export async function fetchWithFallback(
           ok: true,
           status: resp.status,
           html,
+          finalUrl: url, // ScraperAPI's own URL is resp.url; the site's final URL isn't exposed
           tier: "scraperapi_plain",
           creditsUsed: cost,
         };
@@ -334,6 +369,7 @@ export async function fetchWithFallback(
         ok: false,
         status: resp.status,
         html: "",
+        finalUrl: url,
         tier: "failed",
         creditsUsed: cost,
         error: `ScraperAPI returned HTTP ${resp.status}`,
@@ -344,6 +380,7 @@ export async function fetchWithFallback(
         ok: false,
         status: 0,
         html: "",
+        finalUrl: url,
         tier: "failed",
         creditsUsed: 0,
         error: `ScraperAPI network error: ${err?.message || err}`,
@@ -356,6 +393,7 @@ export async function fetchWithFallback(
     ok: false,
     status: directStatus || 0,
     html: "",
+    finalUrl: url,
     tier: "failed",
     creditsUsed: 0,
     error: `Direct fetch failed (${directStatus || directError?.code || "network error"}) and no proxy service configured`,

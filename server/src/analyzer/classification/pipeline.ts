@@ -2,8 +2,8 @@ import { SectionKey } from "../classify.js";
 import { AnalyzedPage } from "../crawl.js";
 import { checkExceptions } from "./exceptionStore.js";
 import { checkDenylist } from "./denylist.js";
-import { PROTOTYPES } from "./prototypes.js";
-import { embedText, cosineSimilarity, geminiAvailable, geminiCall } from "../gemini.js";
+import { loadPrototypes } from "./prototypes.js";
+import { embedText, cosineSimilarity, geminiAvailable } from "../gemini.js";
 
 export interface ClassificationResult {
   category: SectionKey;
@@ -17,7 +17,8 @@ export async function runClassificationPipeline(
   title: string,
   textSample: string,
   fastSlugMatch: { key: SectionKey; label: string },
-  preloadedException?: { category: string; confidence: number; method: "exception" } | null
+  preloadedException?: { category: string; confidence: number; method: "exception" } | null,
+  opts: { signal?: AbortSignal } = {}
 ): Promise<ClassificationResult> {
   // 1. Exceptions
   const exceptionMatch = preloadedException !== undefined
@@ -54,13 +55,16 @@ export async function runClassificationPipeline(
   }
 
   // 4. Embedding Similarity
-  if (textSample.length > 5 && geminiAvailable()) {
+  // opts.signal is the caller's deadline for the whole embedding stage: once
+  // it fires, remaining pages skip straight to "uncertain" instead of each
+  // waiting out its own API timeout.
+  if (textSample.length > 5 && geminiAvailable() && !opts.signal?.aborted) {
     try {
-      const vector = await embedText(textSample);
+      const [vector, prototypes] = await Promise.all([embedText(textSample, { signal: opts.signal }), loadPrototypes()]);
       let bestMatch = null;
       let highestSimilarity = -1;
 
-      for (const p of PROTOTYPES) {
+      for (const p of prototypes) {
         if (!p.vector) continue;
         const sim = cosineSimilarity(vector, p.vector);
         if (sim > highestSimilarity) {
@@ -78,7 +82,7 @@ export async function runClassificationPipeline(
         };
       }
     } catch (e) {
-      console.warn("Embedding API failed for", page.url, e);
+      if (!opts.signal?.aborted) console.warn("Embedding API failed for", page.url, e instanceof Error ? e.message : e);
     }
   }
 

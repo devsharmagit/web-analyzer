@@ -5,12 +5,24 @@
 // condition type + vocabulary, and an `uncertain` bucket for AI adjudication.
 
 import { geminiAvailable, geminiCall } from "./gemini.js";
-import { fetchContentSignals } from "./fetchContent.js";
+import { fetchContentSignals, type ContentSignals } from "./fetchContent.js";
 import type { AnalyzedPage } from "./crawl.js";
 
 // Bound how many "other"-bucket pages get a real content fetch per analysis —
 // keeps runtime and load on the target site predictable even on a large site.
 const MAX_CONTENT_FETCH = 40;
+// Embedding calls in flight at once (one per ambiguous page).
+const EMBEDDING_CONCURRENCY = 6;
+// classifyPages() finishes within this budget, just under the 90s taxonomy
+// timeout in index.ts. When the OUTER timeout fires, every page is lost —
+// including the hundreds already classified by slug — so each slow step here
+// gets whatever time is left, and degrades on its own if it runs out.
+export const TAXONOMY_BUDGET_MS = 85000;
+
+// Galleries and "results" that aren't patient results: site search, office/
+// team/event photo galleries. Bare "gallery" / "results" still count as
+// before/after (see the beforeAfter section below for why); these don't.
+const NOT_PATIENT_RESULTS_RE = /(search|office|facility|team|staff|event|tour|interior)[-_]?(results?|galler(y|ies)|photos?)/i;
 
 export type SectionKey =
   | "core" | "locations" | "forms" | "care" | "service" | "condition"
@@ -57,7 +69,7 @@ const SECTIONS: Section[] = [
   // confirmed against real sites (conqraesthetics /gallery/, drippynursejess
   // /results/ were both misrouted to "proof" before this widened match).
   { key: "beforeAfter", label: "Before & after", scope: "recommended",
-    test: (p) => /(before-and-after|before-after|b-a-gallery|results-gallery|\bgallery\b|\bresults\b|\bphotos?\b)/i.test(p) },
+    test: (p) => !NOT_PATIENT_RESULTS_RE.test(p) && /(before-and-after|before-after|b-a-gallery|results-gallery|\bgallery\b|\bresults\b|\bphotos?\b)/i.test(p) },
   // Condition vocabulary: what the patient HAS, not what the clinic DOES.
   // Checked before "service" below so condition words win when a URL is
   // otherwise ambiguous, but see the location-suffix guard in classifyPage —
@@ -74,7 +86,7 @@ const SECTIONS: Section[] = [
   { key: "offers", label: "Offers, memberships & financing", scope: "recommended",
     test: (p) => /(special|offer|promo|vip|membership|payment-plan|payment|financ|cherry|carecredit|patientfi|alphaeon|gift|package|bank|discount|affiliate)/i.test(p) },
   { key: "testimonial", label: "Testimonials & reviews", scope: "recommended",
-    test: (p) => /(review|testimonial|gallery|results|partner)/i.test(p) },
+    test: (p) => /(review|testimonial|partner)/i.test(p) || (!NOT_PATIENT_RESULTS_RE.test(p) && /(gallery|results)/i.test(p)) },
   { key: "shop", label: "Store & products", scope: "out-of-scope",
     test: (p, src) => src === "product" || /^\/(shop|store|product|cart|checkout|my-account)/i.test(p) },
   { key: "blog", label: "Blog & articles", scope: "out-of-scope",
@@ -86,7 +98,18 @@ const SECTIONS: Section[] = [
     test: (p) => /(privacy|terms|policy|policies|accessibility|hipaa|disclaimer|xml-sitemap)/i.test(p) },
   { key: "careers", label: "Careers", scope: "out-of-scope",
     test: (p) => /(career|job|employment|hiring)/i.test(p) },
+  // No path test: these are assigned by the denylist tier in
+  // classification/pipeline.ts (word-bounded "events", "training", ...).
+  // Listed so every category the pipeline can produce has a Section.
+  { key: "events", label: "Events", scope: "optional" },
+  { key: "education", label: "Education & training", scope: "optional" },
 ];
+
+// Nav dropdown labels (crawl.ts extractNavCategories) that aren't themselves
+// section keys. An "About" dropdown holds team, provider-bio and mission
+// pages — all "core" — but SECTIONS.find(key === "about") found nothing, so
+// the hint was silently dropped.
+const NAV_CATEGORY_SECTION: Record<string, SectionKey> = { about: "core" };
 
 export function classifyPage(pathname: string, source: string, navCategory?: string): Section {
   // The sitemap a URL came from is authoritative about WHAT it is, so content type
@@ -121,7 +144,8 @@ export function classifyPage(pathname: string, source: string, navCategory?: str
   // navigation dropdown or header section (e.g. under "Services" or "Payment Plans"),
   // honor the website's own explicit categorization!
   if (navCategory) {
-    const navSection = SECTIONS.find((s) => s.key === navCategory);
+    const key = NAV_CATEGORY_SECTION[navCategory] ?? navCategory;
+    const navSection = SECTIONS.find((s) => s.key === key);
     if (navSection) return navSection;
   }
 
@@ -156,11 +180,32 @@ export interface TaxonomyResult {
 // regex before the slow step even started.
 async function withInternalTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<{ value: T; timedOut: boolean }> {
   let timedOut = false;
-  const value = await Promise.race([
-    promise,
-    new Promise<T>((resolve) => setTimeout(() => { timedOut = true; resolve(fallback); }, ms)),
-  ]);
-  return { value, timedOut };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const value = await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => { timedOut = true; resolve(fallback); }, ms);
+      }),
+    ]);
+    return { value, timedOut };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Like Promise.all(items.map(fn)), but at most `limit` calls in flight; results keep input order. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 // Pages that landed in "other" AND are plausible custom-post-type service pages
@@ -236,6 +281,9 @@ import { batchCheckExceptions } from "./classification/exceptionStore.js";
 
 /** Classify every discovered page into the taxonomy, with AI adjudication for the ambiguous remainder. */
 export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResult> {
+  const started = Date.now();
+  // Time left in the budget after holding back `reserve` ms for later steps.
+  const timeLeft = (reserve: number) => Math.max(1000, TAXONOMY_BUDGET_MS - (Date.now() - started) - reserve);
   const byType: Record<string, { count: number; urls: ClassifiedUrl[] }> = {};
   const push = (key: string, classifiedUrl: ClassifiedUrl) => {
     if (!byType[key]) byType[key] = { count: 0, urls: [] };
@@ -266,9 +314,9 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
   // 1. Fetch content for ambiguous pages (up to limit)
   const pagesToFetch = [...uncertainPages, ...otherPages].slice(0, MAX_CONTENT_FETCH);
   const { value: signals, timedOut: contentFetchTimedOut } = await withInternalTimeout(
-    fetchContentSignals(pagesToFetch.map((p) => p.url)).catch(() => new Map<string, any>()),
-    35000,
-    new Map<string, any>()
+    fetchContentSignals(pagesToFetch.map((p) => p.url)).catch(() => new Map<string, ContentSignals>()),
+    Math.min(35000, timeLeft(50000)),
+    new Map<string, ContentSignals>()
   );
   
   if (contentFetchTimedOut && pagesToFetch.length) {
@@ -276,33 +324,42 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
   }
 
   // 2. Pre-load exception store overrides in ONE batch query across all pages
-  const exceptionsMap = await batchCheckExceptions(pages.map((p) => p.url));
+  const { value: exceptionsMap } = await withInternalTimeout(
+    batchCheckExceptions(pages.map((p) => p.url)),
+    Math.min(10000, timeLeft(45000)),
+    new Map<string, { category: string; confidence: number; method: "exception" }>()
+  );
 
-  // 3. Run pipeline for ALL pages
+  // 3. Run the pipeline for every page. Most resolve instantly (exception,
+  // slug, denylist); the rest make one embedding call each, run a few at a
+  // time under a shared deadline — once it passes, the remaining pages go
+  // straight to AI adjudication instead of each waiting out an API timeout.
+  const embeddingDeadline = AbortSignal.timeout(Math.min(15000, timeLeft(35000)));
+  const realPages = pages.filter((p) => p.isPage);
+  const outcomes = await mapWithConcurrency(realPages, EMBEDDING_CONCURRENCY, async (p) => {
+    const sig = signals.get(p.url);
+    // Check shop/product via fetch signals first if available
+    if (sig?.looksLikeProduct) return { page: p, product: true as const };
+    const textSample = sig ? `${sig.title} ${sig.h1} ${sig.metaDescription}` : "";
+    const result = await runClassificationPipeline(p, sig?.title || "", textSample, fastMatches.get(p.url)!, exceptionsMap.get(p.url) || null, {
+      signal: embeddingDeadline,
+    });
+    return { page: p, textSample, result, product: false as const };
+  });
+  if (embeddingDeadline.aborted) {
+    warnings.push("Embedding similarity ran out of time; the remaining ambiguous pages went to AI adjudication instead.");
+  }
+
   const llmAdjudicationQueue: AnalyzedPage[] = [];
 
-  for (const p of pages) {
-    if (!p.isPage) continue;
-    const fastMatch = fastMatches.get(p.url)!;
-    const sig = signals.get(p.url);
-    
-    // Check shop/product via fetch signals first if available
-    if (sig?.looksLikeProduct) {
+  for (const outcome of outcomes) {
+    const p = outcome.page;
+    if (outcome.product) {
        push("shop", { url: p.url, method: "content_signals", confidence: 0.9, reason: "Product JSON-LD or meta tags detected" });
        continue;
     }
-    
-    const textSample = sig ? `${sig.title} ${sig.h1} ${sig.metaDescription}` : "";
-    const title = sig?.title || "";
+    const { result, textSample } = outcome;
 
-    const result = await runClassificationPipeline(
-      p,
-      title,
-      textSample,
-      fastMatch,
-      exceptionsMap.get(p.url) || null
-    );
-    
     if (result.method === "unresolved" && result.category === "uncertain") {
        // Portfolio/nav:service pages are always worth LLM adjudication.
        // Non-portfolio pages (e.g. Squarespace source:"page") are also worth
@@ -325,7 +382,7 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
   if (llmAdjudicationQueue.length > 0) {
     const { value: resolved, timedOut: adjudicationTimedOut } = await withInternalTimeout(
       adjudicateUncertain(llmAdjudicationQueue, signals).catch(() => new Map<string, AdjudicatedCategory>()),
-      35000,
+      Math.min(35000, timeLeft(0)),
       new Map<string, AdjudicatedCategory>()
     );
     if (adjudicationTimedOut) {

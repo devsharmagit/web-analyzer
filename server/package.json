@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "tsx src/analyzer/crawl.test.ts",
+    "test:unit": "tsx tests/store.unit.test.ts && tsx tests/fixes.unit.test.ts",
     "test:pipeline": "tsx tests/pipeline.integration.test.ts && tsx tests/prototypes.generalization.test.ts",
     "typecheck": "tsc --noEmit",
     "validate": "tsx validation/run.ts",
