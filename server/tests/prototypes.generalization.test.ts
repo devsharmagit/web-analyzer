@@ -4,7 +4,7 @@ try {
 } catch {}
 
 import { embedText, cosineSimilarity } from "../src/analyzer/gemini.js";
-import { PROTOTYPES } from "../src/analyzer/classification/prototypes.js";
+import { loadPrototypes } from "../src/analyzer/classification/prototypes.js";
 
 async function runTests() {
   console.log("=== Testing Prototype Generalization Across Independent Clinics ===");
@@ -48,6 +48,7 @@ async function runTests() {
     }
   ];
 
+  const PROTOTYPES = await loadPrototypes();
   let passed = 0;
   for (const sample of independentHubSamples) {
     const vec = await embedText(sample.text);

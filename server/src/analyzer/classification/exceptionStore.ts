@@ -6,10 +6,51 @@ let pool: pg.Pool | null = null;
 export function getPool(): pg.Pool | null {
   if (!pool && process.env.NEON_DB_URL) {
     pool = new Pool({
-      connectionString: process.env.NEON_DB_URL
+      connectionString: process.env.NEON_DB_URL,
+      // pg's defaults are "wait forever". An unreachable database must not
+      // stall classification — it runs inside the taxonomy phase's timeout,
+      // and a hang here used to cost the entire page taxonomy.
+      connectionTimeoutMillis: 5000,
+      query_timeout: 5000,
     });
+    // An idle client erroring (e.g. Neon closing the connection) is emitted
+    // on the pool; unhandled, it would crash the process.
+    pool.on("error", (err) => console.warn("⚠️  [WARN] Neon DB pool error:", err.message));
   }
   return pool;
+}
+
+// The whole corrections table is small and read on every analysis, so it's
+// cached in memory rather than re-queried each time. addException() clears
+// the cache so a new correction applies to the very next analysis.
+const CACHE_TTL_MS = 60_000;
+interface CompiledCorrections {
+  exact: Map<string, string>;
+  wildcards: Array<{ re: RegExp; category: string }>;
+}
+let cache: { at: number; value: CompiledCorrections } | null = null;
+
+async function loadCorrections(p: pg.Pool): Promise<CompiledCorrections> {
+  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.value;
+
+  const res = await p.query<{ url_pattern: string; correct_category: string }>(
+    `SELECT url_pattern, correct_category FROM corrections ORDER BY created_at ASC`
+  );
+  const exact = new Map<string, string>();
+  const wildcards: Array<{ re: RegExp; category: string }> = [];
+  for (const row of res.rows) {
+    if (row.url_pattern.includes("%")) {
+      const regexStr = "^" + row.url_pattern
+        .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+        .replace(/%/g, ".*")
+        .replace(/_/g, ".") + "$";
+      wildcards.push({ re: new RegExp(regexStr, "i"), category: row.correct_category });
+    } else {
+      exact.set(row.url_pattern, row.correct_category);
+    }
+  }
+  cache = { at: Date.now(), value: { exact, wildcards } };
+  return cache.value;
 }
 
 export async function initExceptionStore(): Promise<boolean> {
@@ -48,26 +89,8 @@ export async function batchCheckExceptions(
   if (!p) return result;
 
   try {
-    const res = await p.query<{ url_pattern: string; correct_category: string }>(
-      `SELECT url_pattern, correct_category FROM corrections ORDER BY created_at ASC`
-    );
-
-    if (res.rows.length === 0) return result;
-
-    const exactMap = new Map<string, string>();
-    const wildcards: Array<{ re: RegExp; category: string }> = [];
-
-    for (const row of res.rows) {
-      if (row.url_pattern.includes("%")) {
-        const regexStr = "^" + row.url_pattern
-          .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
-          .replace(/%/g, ".*")
-          .replace(/_/g, ".") + "$";
-        wildcards.push({ re: new RegExp(regexStr, "i"), category: row.correct_category });
-      } else {
-        exactMap.set(row.url_pattern, row.correct_category);
-      }
-    }
+    const { exact: exactMap, wildcards } = await loadCorrections(p);
+    if (!exactMap.size && !wildcards.length) return result;
 
     for (const u of urls) {
       const exact = exactMap.get(u);
@@ -117,4 +140,5 @@ export async function addException(urlPattern: string, matchedField: string, wro
      VALUES ($1, $2, $3, $4)`,
     [urlPattern, matchedField, wrongCategory, correctCategory]
   );
+  cache = null;
 }

@@ -4,10 +4,8 @@
 
 import { fetchWithFallback } from "./fetchWithFallback.js";
 
-const UA = "Mozilla/5.0 (compatible; G99-Analyzer/1.0)";
-
 export async function fetchHtml(url: string, timeoutMs = 15000): Promise<string> {
-  const res = await fetchWithFallback(url, { timeoutMs, headers: { "User-Agent": UA } });
+  const res = await fetchWithFallback(url, { timeoutMs });
   return res.ok ? res.html : "";
 }
 
