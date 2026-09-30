@@ -44,13 +44,18 @@ const SECTIONS: Section[] = [
   // landing pages in this vertical (confirmed live: lunamedspawi.com links
   // all three from its homepage nav) — the same structural role as the
   // already-listed "services"/"treatments", just different label words a
-  // clinic chose. Exact single-segment match only (^...$), so this never
-  // catches "wellness" appearing inside a blog post slug elsewhere.
+  // clinic chose.
   { key: "core", label: "Core pages", scope: "required",
-    test: (p) =>
-      p === "/" ||
-      /^\/home(-\d+)?\/?$/.test(p) ||
-      /^\/(about|about-us|team|our-team|staff|providers|contacts?|contact-us|services|treatments|menu|injectables|skincare|wellness)\/?$/.test(p) },
+    test: (p) => {
+      const clean = p.replace(/\.(php|html?|aspx?)\/?$/i, "").replace(/\/+$/, "") || "/";
+      return clean === "/" ||
+        /^\/home(-\d+)?$/i.test(clean) ||
+        /^\/(about(-us)?|team|our-team|staff|providers|contacts?|contact-us|get-in-touch|reach-us|why-us|why-[a-z-]+|our-story|international-patients([a-z-]+)?|services|treatments|menu|injectables|skincare|wellness)$/i.test(clean) ||
+        /^\/(about(-us)?|contact(-us)?|why-[a-z-]+)-[a-z0-9-]+$/i.test(clean);
+    }
+  },
+  { key: "media", label: "Media & press", scope: "out-of-scope",
+    test: (p) => /(^|\/)(media|press|in-the-news|newsroom|mediapage)($|[-_/]|\.(php|html?))/i.test(p) },
   // Must be a real location landing page ("medical spa near X"), not merely a URL
   // that happens to end in a state code — that matched 200+ blog posts.
   { key: "locations", label: "Location / local SEO", scope: "recommended",
@@ -77,9 +82,9 @@ const SECTIONS: Section[] = [
   { key: "condition", label: "Condition pages", scope: "recommended",
     test: (p) =>
       /^\/conditions?\//i.test(p) ||
-      /(melasma|rosacea|acne-scar|hyperpigmentation|hair-loss|sun-damage|volume-loss|hyperhidrosis|cellulite|stretch-marks|dark-spots|fine-lines|wrinkles|double-chin|sagging-skin|uneven-skin-tone|enlarged-pores)/i.test(p) },
+      /(melasma|rosacea|\bacne\b|acne-scar|hyperpigmentation|hair-loss|hair-fall|hair-thinning|sun-damage|volume-loss|hyperhidrosis|cellulite|stretch-marks|dark-spots|dark-circle|fine-lines|wrinkles|double-chin|sagging-skin|uneven-skin-tone|enlarged-pores|open-pores|pigmentation|eye-bag|bags-under-eyes|pcod|pcos|concerns)/i.test(p) },
   { key: "service", label: "Treatment / service pages", scope: "required",
-    test: (p) => /(botox|dysport|filler|sculptra|biostimulat|radiesse|dermal-filler|neurotox|jeuveau|xeomin|daxxify|microneedl|skinpen|vivace|potenza|secret-rf|pixel8|opus|morpheus|laser|ipl|photofacial|photo-facial|bbl|moxi|halo|co2|resurfac|rejuvenat|tribella|venus[- ]?(versa|viva|bliss|legacy|freeze)?|versa-pro|peel|chemical-peel|facial|glowtox|hydrafacial|diamondglow|dermaplan|microderm|inject|infusion|iv-|hormone|hrt|weight-loss|semaglutide|tirzepatide|prp|prf|plasma|thread|skincare|coolsculpt|kybella|miradry|thermoclear|red-light|tox|lash|brow|wax|hair-removal|skin-tightening|body-contour|cellulite|contour|body-treatment|treatment(s)?-in-)/i.test(p) },
+    test: (p) => /(botox|dysport|filler|sculptra|biostimulat|radiesse|dermal-filler|neurotox|jeuveau|xeomin|daxxify|microneedl|skinpen|vivace|potenza|secret-rf|pixel8|opus|morpheus|laser|ipl|photofacial|photo-facial|bbl|moxi|halo|co2|resurfac|rejuvenat|tribella|venus[- ]?(versa|viva|bliss|legacy|freeze)?|versa-pro|peel|chemical-peel|facial|glowtox|hydrafacial|diamondglow|dermaplan|microderm|inject|infusion|iv-|hormone|hrt|weight-loss|semaglutide|tirzepatide|prp|prf|plasma|thread|skincare|coolsculpt|kybella|miradry|thermoclear|red-light|tox|lash|brow|wax|hair-removal|skin-tightening|body-contour|cellulite|contour|body-treatment|treatment(s)?-in-|ulthera|ultherapy|thermage|hifu|profhilo|exosome|meso|endolift|sculpsure|cryopen|cryo|lipocryo|fotona|lumecca|volite|skinbooster|salmon-dna|rejuran|polynucleotide|silhouette[- ]?soft|aptos|tattoo-removal|bleaching|lighten|radio[- ]?frequency|rf-microneedl|\bmrf\b|bodywave|ems[- ]?body|body[- ]?sculpt|body[- ]?balanc|fat-loss|fat-reduction|coolandwarmsculpt|warm-cool|micrograft|hair[- ]?system|hair[- ]?transplant|buccal|face[- ]?ironing|gummy[- ]?smile|wart|vitamin[- ]?drip|augmentation|rejuve|dermaroller|anti-aging|pico|picosure|picoway|bridal|bride|groom|rhinoplasty|\bnose\b)/i.test(p) },
   // Offers is tested BEFORE proof: "affiliate-partner-discounts" is a discount
   // program, not a trust/affiliation page, but proof's bare "partner" keyword
   // used to win first — confirmed live on ruma.com.
@@ -212,7 +217,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 // (source === "portfolio") but matched neither service nor condition vocabulary
 // are genuinely ambiguous — batch them to Gemini in one call rather than
 // guessing or one-call-per-URL.
-type AdjudicatedCategory = "service" | "condition" | "blog" | "core" | "offers" | "forms" | "legal" | "testimonial" | "proof" | "locations" | "care" | "other";
+type AdjudicatedCategory = "service" | "condition" | "blog" | "core" | "offers" | "forms" | "legal" | "testimonial" | "proof" | "locations" | "care" | "other" | "media";
 
 async function adjudicateUncertain(
   candidates: AnalyzedPage[],
@@ -225,10 +230,11 @@ async function adjudicateUncertain(
     // Prefer content-fetched signals over slug-derived title — the fetched
     // title/h1/metaDescription give the LLM enough context to classify accurately.
     const sig = signals.get(p.url);
-    const label = sig
+    const rawLabel = sig
       ? `${sig.title}${sig.h1 ? ` | ${sig.h1}` : ""}${sig.metaDescription ? ` — ${sig.metaDescription.substring(0, 80)}` : ""}`
       : p.title || p.path;
-    return `${p.path} :: ${label}`;
+    const cleanLabel = (rawLabel || "").replace(/[\r\n\t]+/g, " ").trim();
+    return `${p.path} :: ${cleanLabel}`;
   }).join("\n");
   const prompt = `You classify med-spa website pages into one of these categories:
 - "service": a specific treatment or procedure (Botox, laser hair removal, microneedling, facials, body contouring)
@@ -239,6 +245,7 @@ async function adjudicateUncertain(
 - "forms": booking, consultation forms, quizzes
 - "legal": privacy policy, terms, HIPAA, accessibility
 - "testimonial": reviews, testimonials, social proof
+- "media": news, press releases, TV or magazine features
 - "other": anything that doesn't fit the above
 
 IMPORTANT RULES:
@@ -247,27 +254,53 @@ IMPORTANT RULES:
 - A page titled "Prices" or "Treatment Prices" is "offers"
 - Single-word category hub pages like /skin/, /body/, /medical/ on a spa site are "service"
 
-For each line below (path :: title), reply with ONLY the path followed by " => <category>", one per line.
+For each line below (path :: title), reply with ONLY the path followed by " => <category>", one per line. Do not output anything else.
 
 Examples:
-/laser-hair-removal/ :: Laser Hair Removal => service
-/acne-scarring/ :: Treating Acne Scars => condition
-/how-often-should-you-get-a-chemical-peel/ :: How Often Should You Get a Chemical Peel? => blog
-/about-us/ :: About Our Team => core
-/jill-mcgraw-pa-c/ :: Jill McGraw, PA-C | Confidence That Blooms => core
-/prices/ :: Treatment Prices => offers
-/body/ :: Body | Expert Body Treatments => service
-/skin/ :: Skin | Expert Skin Treatments => service
+/laser-hair-removal/ => service
+/acne-scarring/ => condition
+/how-often-should-you-get-a-chemical-peel/ => blog
+/about-us/ => core
+/jill-mcgraw-pa-c/ => core
+/prices/ => offers
+/body/ => service
+/skin/ => service
 
 ${list}`;
 
   try {
     const text = await geminiCall([{ text: prompt }], { temperature: 0, maxOutputTokens: 4000 });
+    const categories = "service|condition|blog|core|offers|forms|legal|testimonial|proof|locations|care|other|media";
+    const catRegex = new RegExp(`\\b(${categories})\\b`, "i");
+
     for (const line of text.split("\n")) {
-      const m = line.match(/(?:^|[-*]\s*)(\S+?)(?:\s*::.*?)?\s*=>\s*(service|condition|blog|core|offers|forms|legal|testimonial|proof|locations|care|other)/i);
-      if (m) {
-        const cat = m[2]!.toLowerCase();
-        result.set(m[1]!, (cat === "proof" ? "testimonial" : cat) as AdjudicatedCategory);
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      let matchedPath: string | null = null;
+      let matchedCat: string | null = null;
+
+      if (trimmed.includes("=>")) {
+        const [left, right] = trimmed.split("=>");
+        const pm = left?.match(/(?:^|[-*\d.]\s*)(\/[^\s:]*)/);
+        const cm = right?.match(catRegex);
+        if (pm && cm) {
+          matchedPath = pm[1]!;
+          matchedCat = cm[1]!.toLowerCase();
+        }
+      }
+
+      if (!matchedPath || !matchedCat) {
+        const pm = trimmed.match(/(?:^|[-*\d.]\s*)(\/[^\s:]*)/);
+        const cm = trimmed.match(new RegExp(`(?:=>|::|:|-|=)\\s*(${categories})\\b`, "i"));
+        if (pm && cm) {
+          matchedPath = pm[1]!;
+          matchedCat = cm[1]!.toLowerCase();
+        }
+      }
+
+      if (matchedPath && matchedCat) {
+        result.set(matchedPath, (matchedCat === "proof" ? "testimonial" : matchedCat) as AdjudicatedCategory);
       }
     }
   } catch {
@@ -361,12 +394,10 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
     const { result, textSample } = outcome;
 
     if (result.method === "unresolved" && result.category === "uncertain") {
-       // Portfolio/nav:service pages are always worth LLM adjudication.
-       // Non-portfolio pages (e.g. Squarespace source:"page") are also worth
-       // LLM adjudication IF the content fetcher got real text for the LLM to
-       // use. An empty textSample means the LLM has nothing to work with.
-       const hasRealContent = textSample.trim().length > 20;
-       if (uncertainPages.includes(p) || hasRealContent) {
+       // Send any unresolved page to Gemini adjudication if available.
+       // Even if content fetch was skipped or empty, the URL slug and title
+       // provide strong context for the LLM to classify accurately.
+       if (geminiAvailable()) {
          llmAdjudicationQueue.push(p);
        } else {
          push("other", { url: p.url, method: "fallback", confidence: 0, reason: "Passed through pipeline unrecognized" });
@@ -390,7 +421,7 @@ export async function classifyPages(pages: AnalyzedPage[]): Promise<TaxonomyResu
     }
     
     for (const p of llmAdjudicationQueue) {
-      const verdict = resolved.get(p.path);
+      const verdict = resolved.get(p.path) || resolved.get(p.path.replace(/\/$/, "")) || resolved.get(p.path + "/");
       if (verdict) {
         push(verdict, { url: p.url, method: "llm_adjudication", confidence: 0.8, reason: `LLM selected ${verdict}` });
       } else {

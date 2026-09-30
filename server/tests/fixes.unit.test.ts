@@ -117,9 +117,12 @@ const page = (path: string, source = "page"): AnalyzedPage => ({
   b.server.close();
 
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   console.log("\nPath normalization (BUG-14)");
   ok("/index.php → /", toPagePath("/index.php") === "/");
   ok("double slashes collapse, trailing slash added", toPagePath("/a//b") === "/a/b/");
+  ok("file pages (.php/.html) keep extension without trailing slash", toPagePath("/contact-us.php") === "/contact-us.php");
+  ok("trailing slash on file page (.php/) is normalized", toPagePath("/contact-us.php/") === "/contact-us.php");
   ok("date archive without trailing slash is dropped", toPagePath("/2025/10") === null);
   ok("real dated post is kept", toPagePath("/2025/10/28/my-post") === "/2025/10/28/my-post/");
   ok("assets are dropped", toPagePath("/uploads/menu.pdf") === null);
@@ -149,13 +152,21 @@ const page = (path: string, source = "page"): AnalyzedPage => ({
   ok("About dropdown children are labelled about", nav.get("/meet-dr-jones/") === "about");
 
   // ---------------------------------------------------------------------------
-  console.log("\nTaxonomy (BUG-06, BUG-07)");
+  console.log("\nTaxonomy (BUG-06, BUG-07, PHP/flat site & med-spa expansion)");
   ok("nav 'about' hint resolves to core", classifyPage("/meet-dr-jones/", "page", "about").key === "core");
   ok("bare /gallery/ is still before & after", classifyPage("/gallery/", "page").key === "beforeAfter");
   ok("/results/ is still before & after", classifyPage("/results/", "page").key === "beforeAfter");
   ok("/search-results/ is not before & after", classifyPage("/search-results/", "page").key !== "beforeAfter");
   ok("/office-gallery/ is not before & after or testimonial", !["beforeAfter", "testimonial"].includes(classifyPage("/office-gallery/", "page").key));
   ok("/before-and-after/ is before & after", classifyPage("/before-and-after/", "page").key === "beforeAfter");
+  ok(".php core page resolves to core", classifyPage("/contact-us.php", "page").key === "core");
+  ok("branded about slug resolves to core", classifyPage("/about-us-the-ageless-clinic-best-skin-doctor-mumbai.php", "page").key === "core");
+  ok("profhilo resolves to service", classifyPage("/profhilo.php", "page").key === "service");
+  ok("thermage resolves to service", classifyPage("/thermage-flx.php", "page").key === "service");
+  ok("hifu resolves to service", classifyPage("/hifu.php", "page").key === "service");
+  ok("mesotherapy resolves to service", classifyPage("/mesotherapy.php", "page").key === "service");
+  ok("mediapage resolves to media", classifyPage("/mediapage.php", "page").key === "media");
+  ok("pcod/pcos resolves to condition", classifyPage("/pcod-and-pcos-polycystic-ovarian-disorder-treatment.php", "page").key === "condition");
 
   // ---------------------------------------------------------------------------
   console.log("\nPlatform fingerprints (BUG-03, BUG-15, BUG-23)");

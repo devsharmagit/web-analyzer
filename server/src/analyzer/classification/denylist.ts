@@ -16,8 +16,18 @@ export function checkDenylist(url: string, title: string): { category: string; c
     return { category: "education", confidence: 1.0 };
   }
 
-  // 4. Careers/jobs/press/media-kit terms -> other
-  if (/\b(careers?|jobs?|hiring|press|media-?kit)\b/i.test(text)) {
+  // 4. Careers/jobs -> careers
+  if (/\b(careers?|jobs?|hiring)\b/i.test(text)) {
+    return { category: "careers", confidence: 1.0 };
+  }
+
+  // 5. Press / media-kit -> media
+  if (/\b(press|media-?kit)\b/i.test(text)) {
+    return { category: "media", confidence: 1.0 };
+  }
+
+  // 6. Generic tag archives -> other
+  if (/(^|\/|_|-)tags?(\.php)?\b/i.test(url)) {
     return { category: "other", confidence: 1.0 };
   }
 

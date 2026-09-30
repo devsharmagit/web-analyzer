@@ -75,7 +75,11 @@ const ARCHIVE_SOURCES = new Set(["category", "post_tag", "tag", "author", "produ
 export function toPagePath(pathname: string): string | null {
   let path = pathname.replace(/\/{2,}/g, "/");
   path = path.replace(/\/index\.(php|html?|asp|aspx|cfm|jsp)$/i, "/");
-  if (path !== "/" && !path.endsWith("/")) path += "/";
+  if (/\.(php|html?|asp|aspx|cfm|jsp)\/+$/i.test(path)) {
+    path = path.replace(/\/+$/, "");
+  } else if (path !== "/" && !path.endsWith("/") && !/\.(php|html?|asp|aspx|cfm|jsp)$/i.test(path)) {
+    path += "/";
+  }
   if (ASSET_RE.test(path) || NON_PAGE_PATH_RE.test(path) || DATE_ARCHIVE_PATH_RE.test(path)) return null;
   return path;
 }
